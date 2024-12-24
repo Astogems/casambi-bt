@@ -23,5 +23,7 @@ class IncomingPacketType(IntEnum):
     NetworkConfig = 9
 
 
-MIN_VERSION: Final[int] = 10
-MAX_VERSION: Final[int] = 11
+MIN_EVO_VERSION: Final[int] = 10
+MAX_EVO_VERSION: Final[int] = 11
+FIRST_EVO_VERSION: Final[int] = 10
+SUPPORTED_CLASSIC_VERSION: Final[int] = 5
