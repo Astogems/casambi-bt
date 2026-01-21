@@ -189,7 +189,9 @@ class CasambiClient:
             # Device will initiate key exchange, so listen for that
             self._logger.debug("Starting notify")
             await self._gattClient.start_notify(
-                CASA_AUTH_CHAR_UUID, self._queueCallback
+                CASA_AUTH_CHAR_UUID,
+                self._queueCallback,
+                bluez={"use_start_notify": True},
             )
         finally:
             self._activityLock.release()
