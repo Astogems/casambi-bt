@@ -113,13 +113,10 @@ class KeyStore:
                 key = k
         return key
 
-    def getLegacyKey(self) -> Optional[Key]:
-        key: Optional[Key] = None
+    def getLegacyKey(self, role: int) -> Key | None:
         for k in self._keys:
             if k.type != -1:  # Legacy key
                 continue
-            if not key:
-                key = k
-            elif key.role < k.role:
-                key = k
-        return key
+            elif k.role == -role:
+                return k
+        raise KeyError(f"No legacy key with role {role} found.")
