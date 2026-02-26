@@ -72,10 +72,10 @@ class Cache:
     async def __aenter__(self) -> Path:
         await _cacheLock.acquire()
 
-        if self._uuid is None:
-            raise ValueError("UUID not set.")
-
         try:
+            if self._uuid is None:
+                raise ValueError("UUID not set.")
+
             await self._ensureCacheValid()
 
             cacheDir = Path(self._cachePath / self._uuid)
