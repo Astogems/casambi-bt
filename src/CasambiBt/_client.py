@@ -158,7 +158,10 @@ class CasambiClient:
         await self._activityLock.acquire()
         try:
             # Initiate communication with device
-            firstResp = await self._gattClient.read_gatt_char(CASA_AUTH_CHAR_UUID)
+            try:
+                firstResp = await self._gattClient.read_gatt_char(CASA_AUTH_CHAR_UUID)
+            except BleakError as exc:
+                raise BluetoothError("Failed to initiate GATT read.") from exc
             self._logger.debug(f"Got {b2a(firstResp)}")
 
             # Check type and protocol version
@@ -188,11 +191,14 @@ class CasambiClient:
 
             # Device will initiate key exchange, so listen for that
             self._logger.debug("Starting notify")
-            await self._gattClient.start_notify(
-                CASA_AUTH_CHAR_UUID,
-                self._queueCallback,
-                bluez={"use_start_notify": True},
-            )
+            try:
+                await self._gattClient.start_notify(
+                    CASA_AUTH_CHAR_UUID,
+                    self._queueCallback,
+                    bluez={"use_start_notify": True},
+                )
+            except BleakError as exc:
+                raise BluetoothError("Failed to initiate GATT notify.") from exc
         finally:
             self._activityLock.release()
 
