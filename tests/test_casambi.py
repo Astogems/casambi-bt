@@ -1,0 +1,303 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from bleak.backends.device import BLEDevice
+from httpx import RequestError
+
+from CasambiBt._casambi import Casambi
+from CasambiBt._client import ConnectionState, IncomingPacketType
+from CasambiBt._operation import OpCode
+from CasambiBt._switch import ButtonEventType, SwitchEvent
+from CasambiBt._unit import Group, Scene, Unit, UnitControl, UnitControlType, UnitType
+from CasambiBt.errors import ConnectionStateError
+
+
+@pytest.fixture
+def mock_network_class():
+    with patch("CasambiBt._casambi.Network") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_client_class():
+    with patch("CasambiBt._casambi.CasambiClient") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_unit():
+    control = UnitControl(
+        type=UnitControlType.DIMMER, offset=0, length=8, default=0, readonly=False
+    )
+    unit_type = UnitType(
+        id=1,
+        model="Model",
+        manufacturer="Casambi",
+        mode="Mode",
+        stateLength=1,
+        controls=[control],
+    )
+    unit = Unit(
+        _typeId=1,
+        deviceId=10,
+        uuid="uuid1",
+        address="addr1",
+        name="Unit 1",
+        firmwareVersion="1.0",
+        unitType=unit_type,
+    )
+    return unit
+
+
+@pytest.fixture
+def mock_xy_unit():
+    control = UnitControl(
+        type=UnitControlType.XY, offset=0, length=22, default=0, readonly=False
+    )
+    unit_type = UnitType(
+        id=2,
+        model="Model",
+        manufacturer="Casambi",
+        mode="Mode",
+        stateLength=3,
+        controls=[control],
+    )
+    unit = Unit(
+        _typeId=2,
+        deviceId=11,
+        uuid="uuid2",
+        address="addr2",
+        name="Unit 2",
+        firmwareVersion="1.0",
+        unitType=unit_type,
+    )
+    return unit
+
+
+@pytest.fixture
+def mock_group(mock_unit):
+    return Group(groudId=20, name="Group 1", units=[mock_unit])
+
+
+@pytest.fixture
+def mock_scene():
+    return Scene(sceneId=30, name="Scene 1")
+
+
+@pytest.fixture
+def casambi():
+    return Casambi()
+
+
+@pytest.fixture
+def connected_casambi(casambi, mock_unit, mock_group, mock_scene):
+    # Setup mock network
+    mock_network = MagicMock()
+    mock_network.disconnect = AsyncMock()
+    mock_network._networkRevision = 1
+    mock_network._networkName = "Test Network"
+    mock_network._id = "test-id"
+    mock_network.units = [mock_unit]
+    mock_network.groups = [mock_group]
+    mock_network.scenes = [mock_scene]
+
+    # Setup mock client
+    mock_client = AsyncMock()
+    mock_client._connectionState = ConnectionState.AUTHENTICATED
+
+    casambi._casaNetwork = mock_network
+    casambi._casaClient = mock_client
+    return casambi
+
+
+def test_init(casambi):
+    assert casambi._casaClient is None
+    assert casambi._casaNetwork is None
+    assert not casambi.connected
+
+
+def test_properties_unconnected(casambi):
+    with pytest.raises(ConnectionStateError):
+        _ = casambi.networkName
+    with pytest.raises(ConnectionStateError):
+        _ = casambi.networkId
+    with pytest.raises(ConnectionStateError):
+        _ = casambi.units
+    with pytest.raises(ConnectionStateError):
+        _ = casambi.groups
+    with pytest.raises(ConnectionStateError):
+        _ = casambi.scenes
+
+
+def test_properties_connected(connected_casambi):
+    assert connected_casambi.networkName == "Test Network"
+    assert connected_casambi.networkId == "test-id"
+    assert len(connected_casambi.units) == 1
+    assert len(connected_casambi.groups) == 1
+    assert len(connected_casambi.scenes) == 1
+    assert connected_casambi.connected
+
+
+async def test_connect(casambi, mock_network_class, mock_client_class):
+    mock_network_inst = mock_network_class.return_value
+    mock_network_inst.load = AsyncMock()
+    mock_network_inst.logIn = AsyncMock()
+    mock_network_inst.update = AsyncMock()
+
+    mock_client_inst = mock_client_class.return_value
+    mock_client_inst.connect = AsyncMock()
+    mock_client_inst.exchangeKey = AsyncMock()
+    mock_client_inst.authenticate = AsyncMock()
+
+    device = MagicMock(spec=BLEDevice)
+    device.address = "00:11:22:33:44:55"
+    await casambi.connect(device, "password")
+
+    mock_network_class.assert_called_once()
+    mock_network_inst.load.assert_called_once()
+    mock_network_inst.logIn.assert_called_once_with("password", False)
+    mock_network_inst.update.assert_called_once_with(False)
+
+    mock_client_class.assert_called_once()
+    mock_client_inst.connect.assert_called_once()
+    mock_client_inst.exchangeKey.assert_called_once()
+    mock_client_inst.authenticate.assert_called_once()
+
+
+async def test_connect_offline_fallback(casambi, mock_network_class, mock_client_class):
+    mock_network_inst = mock_network_class.return_value
+    mock_network_inst.load = AsyncMock()
+
+    # Simulate RequestError during logIn
+    mock_network_inst.logIn = AsyncMock(side_effect=RequestError("Error"))
+    mock_network_inst.update = AsyncMock()
+
+    mock_client_inst = mock_client_class.return_value
+    mock_client_inst.connect = AsyncMock()
+    mock_client_inst.exchangeKey = AsyncMock()
+    mock_client_inst.authenticate = AsyncMock()
+
+    await casambi.connect("00:11:22:33:44:55", "password")
+
+    mock_network_inst.logIn.assert_called_once_with("password", False)
+    # Update should be called with forceOffline=True
+    mock_network_inst.update.assert_called_once_with(True)
+
+
+async def test_set_level_valid(connected_casambi, mock_unit):
+    await connected_casambi.setLevel(mock_unit, 128)
+    # Check what was sent
+    connected_casambi._casaClient.send.assert_called_once()
+    args, _ = connected_casambi._casaClient.send.call_args
+    pkt = args[0]
+    # Header is 9 bytes, followed by payload
+    assert len(pkt) == 10  # 9 byte header + 1 byte payload
+    assert pkt[-1] == 128
+
+
+async def test_set_level_invalid(connected_casambi, mock_unit):
+    with pytest.raises(ValueError):
+        await connected_casambi.setLevel(mock_unit, 256)
+    with pytest.raises(ValueError):
+        await connected_casambi.setLevel(mock_unit, -1)
+
+
+async def test_set_color(connected_casambi, mock_unit):
+    await connected_casambi.setColor(mock_unit, (255, 0, 0))
+    connected_casambi._casaClient.send.assert_called_once()
+
+
+async def test_set_color_xy(connected_casambi, mock_xy_unit):
+    await connected_casambi.setColorXY(mock_xy_unit, (0.5, 0.5))
+    connected_casambi._casaClient.send.assert_called_once()
+
+
+async def test_set_color_xy_invalid(connected_casambi, mock_unit, mock_xy_unit):
+    with pytest.raises(ValueError):
+        await connected_casambi.setColorXY(
+            mock_unit, (0.5, 0.5)
+        )  # Unit doesn't support XY
+    with pytest.raises(ValueError):
+        await connected_casambi.setColorXY(mock_xy_unit, (1.5, 0.5))  # Out of bounds
+
+
+async def test_turn_on(connected_casambi, mock_unit):
+    await connected_casambi.turnOn(mock_unit)
+    connected_casambi._casaClient.send.assert_called_once()
+    args, _ = connected_casambi._casaClient.send.call_args
+    pkt = args[0]
+    assert pkt[-2:] == b"\xff\x05"
+
+
+async def test_switch_to_scene(connected_casambi, mock_scene):
+    await connected_casambi.switchToScene(mock_scene)
+    connected_casambi._casaClient.send.assert_called_once()
+
+
+async def test_send_unsupported_target(connected_casambi):
+    with pytest.raises(TypeError):
+        await connected_casambi._send("unsupported", b"", OpCode.SetLevel)
+
+
+def test_data_callback_unit_state(connected_casambi, mock_unit):
+    handler = MagicMock()
+    connected_casambi.registerUnitChangedHandler(handler)
+
+    data = {"id": mock_unit.deviceId, "on": True, "online": True, "state": b"\x00"}
+
+    mock_unit.setStateFromBytes = MagicMock()
+    connected_casambi._dataCallback(IncomingPacketType.UnitState, data)
+
+    mock_unit.setStateFromBytes.assert_called_once_with(b"\x00")
+    assert mock_unit._on is True
+    assert mock_unit._online is True
+    handler.assert_called_once_with(mock_unit)
+
+    connected_casambi.unregisterUnitChangedHandler(handler)
+    assert handler not in connected_casambi._unitChangedCallbacks
+
+
+def test_data_callback_switch_event(connected_casambi):
+    handler = MagicMock()
+    connected_casambi.registerSwitchEventHandler(handler)
+
+    event = SwitchEvent(
+        unit_id=1,
+        button=1,
+        event=ButtonEventType.PRESS,
+        action=1,
+        message_type=0x08,
+        flags=0x00,
+        extra_data=b"",
+    )
+    connected_casambi._dataCallback(IncomingPacketType.SwitchEvent, event)
+
+    handler.assert_called_once_with(event)
+
+    connected_casambi.unregisterSwitchEventHandler(handler)
+    assert handler not in connected_casambi._switchEventCallbacks
+
+
+def test_disconnect_callback(connected_casambi, mock_unit):
+    handler = MagicMock()
+    connected_casambi.registerDisconnectCallback(handler)
+
+    unit_handler = MagicMock()
+    connected_casambi.registerUnitChangedHandler(unit_handler)
+
+    connected_casambi._disconnectCallback()
+
+    assert mock_unit._online is False
+    unit_handler.assert_called_once_with(mock_unit)
+    handler.assert_called_once()
+
+    connected_casambi.unregisterDisconnectCallback(handler)
+    assert handler not in connected_casambi._disconnectCallbacks
+
+
+async def test_disconnect(connected_casambi):
+    mock_network = connected_casambi._casaNetwork
+    await connected_casambi.disconnect()
+    connected_casambi._casaClient.disconnect.assert_called_once()
+    mock_network.disconnect.assert_called_once()
+    assert connected_casambi._casaNetwork is None
