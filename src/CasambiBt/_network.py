@@ -2,7 +2,7 @@ import json
 import logging
 import pickle
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Final, cast
 
 import httpx
@@ -34,7 +34,7 @@ class _NetworkSession:
     role: int = 3  # TODO: Support other role types?
 
     def expired(self) -> bool:
-        return datetime.utcnow() > self.expires
+        return datetime.now(UTC) > self.expires
 
 
 class Network:
@@ -169,8 +169,8 @@ class Network:
         if res.status_code == httpx.codes.OK:
             # Parse session
             sessionJson = res.json()
-            sessionJson["expires"] = datetime.utcfromtimestamp(
-                sessionJson["expires"] / 1000
+            sessionJson["expires"] = datetime.fromtimestamp(
+                sessionJson["expires"] / 1000, UTC
             )
             self._session = _NetworkSession(**sessionJson)
             self._logger.info("Login sucessful.")
