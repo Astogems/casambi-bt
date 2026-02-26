@@ -741,16 +741,16 @@ class CasambiClientClassic(CasambiClient):
                     f"Got unit response {b2a(packetContents[pos:statePos + stateLen])}. Not yet implemented."
                 )
             else:
-                state = packetContents[statePos:stateLen]
+                state = packetContents[statePos : statePos + stateLen]
 
                 self._logger.debug(
-                    f"Parsed state: Id {id}, prio {prio}, online {online}, state {b2a(state)}1"
+                    f"Parsed state: Id {unitId}, prio {prio}, online {online}, state {b2a(state)}1"
                 )
 
                 # It's ok to parse anything as on. The value will only be used if no appropriate controls are available.
                 self._dataCallback(
                     IncomingPacketType.UnitState,
-                    {"id": id, "online": online, "on": False, "state": state},
+                    {"id": unitId, "online": online, "on": False, "state": state},
                 )
                 pass
 
