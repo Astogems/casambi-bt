@@ -60,6 +60,7 @@ class Casambi:
 
     @property
     def networkId(self) -> str:
+        self._checkNetwork()
         return self._casaNetwork._id  # type: ignore
 
     @property
