@@ -117,6 +117,6 @@ class KeyStore:
         for k in self._keys:
             if k.type != -1:  # Legacy key
                 continue
-            elif k.role == -role:
+            elif k.role == role:
                 return k
-        raise KeyError(f"No legacy key with role {role} found.")
+        return None

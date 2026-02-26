@@ -24,12 +24,16 @@ from CasambiBt._switch import parseSwitchEvents
 
 from ._constants import (
     CASA_AUTH_CHAR_UUID,
+    CLASSIC_AUTH_LEVEL_MANAGER,
+    CLASSIC_AUTH_LEVEL_VISITOR,
+    FIRST_EVO_VERSION,
     MAX_EVO_VERSION,
     MIN_EVO_VERSION,
+    MIN_SUPPORTED_CLASSIC_VERSION,
     ConnectionState,
     IncomingPacketType,
 )
-from ._encryption import Encryptor
+from ._encryption import ClassicEncryptor, Encryptor
 from ._network import Network
 
 # We need to move these imports here to prevent a cycle.
@@ -57,10 +61,6 @@ class CasambiClient(ABC):
         self._mtu: int
         self._unitId: int
         self._flags: int
-        self._nonce: bytes
-        self._key: bytearray
-
-        self._encryptor: Encryptor
 
         self._outPacketCount = 0
         self._inPacketCount = 0
@@ -79,6 +79,10 @@ class CasambiClient(ABC):
         self._dataCallback = dataCallback
         self._disconnectedCallback = disonnectedCallback
         self._activityLock = asyncio.Lock()
+
+        self._logger.info(
+            f"Initializing client for {self.address} with network version {network.protocolVersion}."
+        )
 
         self._checkProtocolVersion(network.protocolVersion)
 
@@ -167,14 +171,17 @@ class CasambiClient(ABC):
     def _callbackMulitplexer(
         self, handle: BleakGATTCharacteristic, data: bytes
     ) -> None:
-        self._logger.debug(f"Callback on handle {handle}: {b2a(data)}")
+        self._logger.debug(
+            f"[CASAMBI_RAW_PACKET] Callback on handle {handle} in state {self._connectionState}: {b2a(data)}"
+        )
 
         if self._connectionState == ConnectionState.CONNECTED:
-            self._exchNofityCallback(handle, data)
+            self._exchNotifyCallback(handle, data)
         elif self._connectionState == ConnectionState.KEY_EXCHANGED:
-            self._authNofityCallback(handle, data)
+            self._authNotifyCallback(handle, data)
         elif self._connectionState == ConnectionState.AUTHENTICATED:
-            self._establishedNofityCallback(handle, data)
+            self._inPacketCount += 1
+            self._establishedNotifyCallback(handle, data)
         else:
             self._logger.warning(
                 f"Unhandled notify in state {self._connectionState}: {b2a(data)}"
@@ -185,7 +192,7 @@ class CasambiClient(ABC):
         pass
 
     @abstractmethod
-    def _exchNofityCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
+    def _exchNotifyCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
         pass
 
     @abstractmethod
@@ -193,25 +200,14 @@ class CasambiClient(ABC):
         pass
 
     @abstractmethod
-    def _authNofityCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
+    def _authNotifyCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
         pass
 
-    async def _writeEncPacket(
-        self, packet: bytes, id: int, char: str | BleakGATTCharacteristic
+    @abstractmethod
+    def _establishedNotifyCallback(
+        self, handle: BleakGATTCharacteristic, data: bytes
     ) -> None:
-        encPacket = self._encryptor.encryptThenMac(packet, self._getNonce(id))
-        try:
-            await self._gattClient.write_gatt_char(char, encPacket)
-        except BleakError as e:
-            if e.args[0] == "Not connected":
-                self._connectionState = ConnectionState.NONE
-            else:
-                raise e
-
-    def _getNonce(self, id: int | bytes) -> bytes:
-        if isinstance(id, int):
-            id = id.to_bytes(4, "little")
-        return self._nonce[:4] + id + self._nonce[8:]
+        pass
 
     async def send(self, packet: bytes) -> None:
         self._checkState(ConnectionState.AUTHENTICATED)
@@ -221,109 +217,15 @@ class CasambiClient(ABC):
             self._logger.debug(
                 f"Sending packet {b2a(packet)} with counter {self._outPacketCount}"
             )
+            await self._sendInternal(packet)
 
-            counter = int.to_bytes(self._outPacketCount, 4, "little")
-            headerPaket = counter + b"\x07" + packet
-
-            self._logger.debug(f"Packet with header: {b2a(headerPaket)}")
-
-            await self._writeEncPacket(
-                headerPaket, self._outPacketCount, CASA_AUTH_CHAR_UUID
-            )
             self._outPacketCount += 1
         finally:
             self._activityLock.release()
 
-    def _establishedNofityCallback(
-        self, handle: BleakGATTCharacteristic, data: bytes
-    ) -> None:
-        # TODO: Check incoming counter and direction flag
-        self._inPacketCount += 1
-
-        # Store raw encrypted packet for reference
-        raw_encrypted_packet = data[:]
-
-        # Log raw encrypted packet with special marker for easy filtering
-        self._logger.info(
-            f"[CASAMBI_RAW_PACKET] Encrypted #{self._inPacketCount}: {b2a(raw_encrypted_packet)}"
-        )
-
-        try:
-            decrypted_data = self._encryptor.decryptAndVerify(
-                data, data[:4] + self._nonce[4:]
-            )
-        except InvalidSignature:
-            # We only drop packets with invalid signature here instead of going into an error state
-            self._logger.error(f"Invalid signature for packet {b2a(data)}!")
-            return
-
-        packetType = decrypted_data[0]
-        self._logger.debug(f"Incoming data of type {packetType}: {b2a(decrypted_data)}")
-
-        # Log decrypted packet with special marker
-        self._logger.info(
-            f"[CASAMBI_DECRYPTED] Type={packetType} #{self._inPacketCount}: {b2a(decrypted_data)}"
-        )
-
-        if packetType == IncomingPacketType.UnitState:
-            self._parseUnitStates(decrypted_data[1:])
-        elif packetType == IncomingPacketType.SwitchEvent:
-            for s in parseSwitchEvents(
-                decrypted_data[1:], self._inPacketCount, raw_encrypted_packet
-            ):
-                self._dataCallback(IncomingPacketType.SwitchEvent, s)
-        elif packetType == IncomingPacketType.NetworkConfig:
-            # We don't care about the config the network thinks it has.
-            # We assume that cloud config and local config match.
-            # If there is a mismatch the user can solve it using the app.
-            # In the future we might want to parse the revision and issue a warning if there is a mismatch.
-            pass
-        else:
-            self._logger.info(f"Packet type {packetType} not implemented. Ignoring!")
-
-    def _parseUnitStates(self, data: bytes) -> None:
-        self._logger.info("Parsing incoming unit states...")
-        self._logger.debug(f"Incoming unit state: {b2a(data)}")
-
-        pos = 0
-        oldPos = 0
-        try:
-            while pos <= len(data) - 4:
-                id = data[pos]
-                flags = data[pos + 1]
-                stateLen = ((data[pos + 2] >> 4) & 15) + 1
-                prio = data[pos + 2] & 15
-                pos += 3
-
-                online = flags & 2 != 0
-                on = flags & 1 != 0
-
-                if flags & 4:
-                    pos += 1  # TODO: con?
-                if flags & 8:
-                    pos += 1  # TODO: sid?
-                if flags & 16:
-                    pos += 1  # Unkown value
-
-                state = data[pos : pos + stateLen]
-                pos += stateLen
-
-                pos += (flags >> 6) & 3  # Padding?
-
-                self._logger.debug(
-                    f"Parsed state: Id {id}, prio {prio}, online {online}, on {on}, state {b2a(state)}1"
-                )
-
-                self._dataCallback(
-                    IncomingPacketType.UnitState,
-                    {"id": id, "online": online, "on": on, "state": state},
-                )
-
-                oldPos = pos
-        except IndexError:
-            self._logger.error(
-                f"Ran out of data while parsing unit state! Remaining data {b2a(data[oldPos:])} in {b2a(data)}."
-            )
+    @abstractmethod
+    async def _sendInternal(self, packet: bytes) -> None:
+        pass
 
     async def disconnect(self) -> None:
         self._logger.info("Disconnecting...")
@@ -343,6 +245,19 @@ class CasambiClient(ABC):
 
 
 class CasambiClientEvolution(CasambiClient):
+    def __init__(
+        self,
+        address_or_device: str | BLEDevice,
+        dataCallback: Callable[[IncomingPacketType, Any], None],
+        disonnectedCallback: Callable[[], None],
+        network: Network,
+    ) -> None:
+        self._nonce: bytes
+        self._encryptor: Encryptor
+        self._key: bytearray
+
+        super().__init__(address_or_device, dataCallback, disonnectedCallback, network)
+
     def _checkProtocolVersion(self, version: int) -> None:
         if version < MIN_EVO_VERSION:
             raise UnsupportedProtocolVersion(
@@ -437,7 +352,7 @@ class CasambiClientEvolution(CasambiClient):
                 raise ProtocolError("Failed to negotiate key!")
             else:
                 self._logger.info("Key exchange sucessful")
-                self._encryptor = Encryptor(self._transportKey)
+                self._encryptor = Encryptor(self._key)
 
                 # Skip auth if the network doesn't use a key.
                 if self._network.keyStore.getKey():
@@ -447,7 +362,7 @@ class CasambiClientEvolution(CasambiClient):
         finally:
             self._activityLock.release()
 
-    def _exchNofityCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
+    def _exchNotifyCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
         if data[0] == 0x2:
             # Parse device pubkey
             x, y = struct.unpack_from("<32s32s", data, 1)
@@ -539,7 +454,7 @@ class CasambiClientEvolution(CasambiClient):
         finally:
             self._activityLock.release()
 
-    def _authNofityCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
+    def _authNotifyCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
         self._logger.info("Processing authentication response...")
 
         # TODO: Verify counter
@@ -556,18 +471,152 @@ class CasambiClientEvolution(CasambiClient):
 
         self._notifySignal.set()
 
+    def _establishedNotifyCallback(
+        self, handle: BleakGATTCharacteristic, data: bytes
+    ) -> None:
+        # TODO: Check incoming counter and direction flag
+
+        try:
+            packetContents = self._encryptor.decryptAndVerify(
+                data, data[:4] + self._nonce[4:]
+            )
+        except InvalidSignature:
+            # We only drop packets with invalid signature here instead of going into an error state
+            self._logger.error(f"Invalid signature for packet {b2a(data)}!")
+            return
+
+        packetType = packetContents[0]
+        self._logger.debug(f"Incoming data of type {packetType}: {b2a(packetContents)}")
+
+        # Log decrypted packet with special marker
+        self._logger.debug(
+            f"[CASAMBI_DECRYPTED] Type={packetType} #{self._inPacketCount}: {b2a(packetContents)}"
+        )
+
+        if packetType == IncomingPacketType.UnitState:
+            self._parseUnitStates(packetContents[1:])
+        elif packetType == IncomingPacketType.SwitchEvent:
+            for s in parseSwitchEvents(packetContents[1:], self._inPacketCount):
+                self._dataCallback(IncomingPacketType.SwitchEvent, s)
+        elif packetType == IncomingPacketType.NetworkConfig:
+            # We don't care about the config the network thinks it has.
+            # We assume that cloud config and local config match.
+            # If there is a mismatch the user can solve it using the app.
+            # In the future we might want to parse the revision and issue a warning if there is a mismatch.
+            pass
+        else:
+            self._logger.info(f"Packet type {packetType} not implemented. Ignoring!")
+
+    def _parseUnitStates(self, data: bytes) -> None:
+        self._logger.info("Parsing incoming unit states...")
+        self._logger.debug(f"Incoming unit state: {b2a(data)}")
+
+        pos = 0
+        oldPos = 0
+        try:
+            while pos <= len(data) - 4:
+                id = data[pos]
+                flags = data[pos + 1]
+                stateLen = ((data[pos + 2] >> 4) & 15) + 1
+                prio = data[pos + 2] & 15
+                pos += 3
+
+                online = flags & 2 != 0
+                on = flags & 1 != 0
+
+                if flags & 4:
+                    pos += 1  # TODO: con?
+                if flags & 8:
+                    pos += 1  # TODO: sid?
+                if flags & 16:
+                    pos += 1  # Unkown value
+
+                state = data[pos : pos + stateLen]
+                pos += stateLen
+
+                pos += (flags >> 6) & 3  # Padding?
+
+                self._logger.debug(
+                    f"Parsed state: Id {id}, prio {prio}, online {online}, on {on}, state {b2a(state)}1"
+                )
+
+                self._dataCallback(
+                    IncomingPacketType.UnitState,
+                    {"id": id, "online": online, "on": on, "state": state},
+                )
+
+                oldPos = pos
+        except IndexError:
+            self._logger.error(
+                f"Ran out of data while parsing unit state! Remaining data {b2a(data[oldPos:])} in {b2a(data)}."
+            )
+
+    async def _sendInternal(self, packet: bytes) -> None:
+        counter = int.to_bytes(self._outPacketCount, 4, "little")
+        headerPaket = counter + b"\x07" + packet
+
+        self._logger.debug(f"Packet with header: {b2a(headerPaket)}")
+
+        await self._writeEncPacket(
+            headerPaket, self._outPacketCount, CASA_AUTH_CHAR_UUID
+        )
+
+    async def _writeEncPacket(
+        self, packet: bytes, id: int, char: str | BleakGATTCharacteristic
+    ) -> None:
+        encPacket = self._encryptor.encryptThenMac(packet, self._getNonce(id))
+        try:
+            await self._gattClient.write_gatt_char(char, encPacket)
+        except BleakError as e:
+            if e.args[0] == "Not connected":
+                self._connectionState = ConnectionState.NONE
+            else:
+                raise e
+
+    def _getNonce(self, id: int | bytes) -> bytes:
+        if isinstance(id, int):
+            id = id.to_bytes(4, "little")
+        return self._nonce[:4] + id + self._nonce[8:]
+
 
 class CasambiClientClassic(CasambiClient):
+    """This is a client implementation for conformant classic networks."""
+
+    def __init__(
+        self,
+        address_or_device: str | BLEDevice,
+        dataCallback: Callable[[IncomingPacketType, Any], None],
+        disonnectedCallback: Callable[[], None],
+        network: Network,
+    ) -> None:
+        self._connhash: bytes
+
+        visitorKey = network.keyStore.getLegacyKey(CLASSIC_AUTH_LEVEL_VISITOR)
+        if not visitorKey:
+            raise ProtocolError("Can't continue without visitor key.")
+        self._visitorEncryptor = ClassicEncryptor(visitorKey.key, 4)
+
+        self._managerEncryptor: ClassicEncryptor | None
+        managerKey = network.keyStore.getLegacyKey(CLASSIC_AUTH_LEVEL_MANAGER)
+        if managerKey:
+            self._managerEncryptor = ClassicEncryptor(managerKey.key, 16)
+        else:
+            self._managerEncryptor = None
+            self._logger.warning(
+                "No manager key in keystore. Manager level packets won't be handled correctly."
+            )
+        super().__init__(address_or_device, dataCallback, disonnectedCallback, network)
+
     def _checkProtocolVersion(self, version: int) -> None:
         if version < FIRST_EVO_VERSION:
             raise UnsupportedProtocolVersion(
                 "Evolution networks aren't supported by this class."
             )
-        if version != SUPPORTED_CLASSIC_VERSION:
-            self._logger.warning(
-                "Version unknown. Your network version is %i. Supported version for classic networks is %i. Continuing with an untested version.",
-                version,
-                SUPPORTED_CLASSIC_VERSION,
+
+        if version < MIN_SUPPORTED_CLASSIC_VERSION:
+            raise UnsupportedProtocolVersion(
+                f"Network version {version} is too old. Nonconformant classic networks currently not supported."
+                f"Minimum supported version is {MIN_SUPPORTED_CLASSIC_VERSION}."
             )
 
     async def exchangeKey(self) -> None:
@@ -584,18 +633,16 @@ class CasambiClientClassic(CasambiClient):
                 raise BluetoothError("Failed to initiate GATT read.") from exc
             self._logger.debug(f"Got {b2a(firstResp)}")
 
-            # Check type and protocol version
-            if not (
-                firstResp[0] == 0x1 and firstResp[1] == self._network.protocolVersion
-            ):
-                self._logger.error(
-                    "Unexpected answer from device! Wrong device or protocol version? Trying to continue."
-                )
-
             # Parse device info
-            self._nonce, self._unit, self._flags, self._mtu, protocolVersion = (
-                struct.unpack_from(">4sBBBB", firstResp, 2)
-            )
+            (
+                self._connhash,
+                self._unit,
+                flags_lo,
+                self._mtu,
+                protocolVersion,
+                flags_high,
+            ) = struct.unpack_from(">8sBBBBB", firstResp, 2)
+            self._flags = flags_lo | (flags_high << 8)
 
             if protocolVersion != self._network.protocolVersion:
                 self._logger.warning(
@@ -604,12 +651,10 @@ class CasambiClientClassic(CasambiClient):
                     self._network.protocolVersion,
                 )
 
-            # We skip the second part of the flags here since they are currently unused and optional.
             self._logger.debug(
-                f"Parsed mtu {self._mtu}, unit {self._unit}, flags {self._flags}, nonce {b2a(self._nonce)}"
+                f"Parsed mtu {self._mtu}, unit {self._unit}, flags {self._flags}, connhash {b2a(self._connhash)}"
             )
 
-            # Device will initiate key exchange, so listen for that
             self._logger.debug("Starting notify")
             try:
                 await self._gattClient.start_notify(
@@ -619,5 +664,132 @@ class CasambiClientClassic(CasambiClient):
                 )
             except BleakError as exc:
                 raise BluetoothError("Failed to initiate GATT notify.") from exc
+            self._connectionState = ConnectionState.KEY_EXCHANGED
         finally:
             self._activityLock.release()
+
+    def _exchNotifyCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
+        raise ProtocolError(
+            "Refusing to handle callback at this time for classic network."
+        )
+
+    async def authenticate(self) -> None:
+        self._checkState(ConnectionState.KEY_EXCHANGED)
+
+        await self._activityLock.acquire()
+        try:
+            # We only send the version for now and not the time.
+            self._logger.info("Sending version.")
+            await self.send(b"\x00\x01\x0b")
+
+            self._connectionState = ConnectionState.AUTHENTICATED
+        finally:
+            self._activityLock.release()
+
+    def _authNotifyCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
+        raise ProtocolError(
+            "Refusing to handle callback at this time for classic network."
+        )
+
+    def _establishedNotifyCallback(
+        self, handle: BleakGATTCharacteristic, data: bytes
+    ) -> None:
+        try:
+            packetContents = self._getPacketContents(data)
+        except InvalidSignature:
+            # We only drop packets with invalid signature here instead of going into an error state
+            self._logger.error(f"Invalid signature for packet {b2a(data)}!")
+            return
+
+        pos = 0
+        while pos < len(packetContents):
+            if pos + 2 > len(packetContents):
+                self._logger.error(f"Failed to find header at {pos}. Abort.")
+                break
+
+            flags = packetContents[pos + 1]
+
+            stateLen = flags & 0x0F
+            prio = flags & 0x10 != 0
+            extra1 = flags & 0x20 != 0
+            extra2 = flags & 0x40 != 0
+            online = flags & 0x80 != 0
+
+            statePos = pos + 2
+
+            if extra1:
+                statePos += 1
+            if extra2:
+                statePos += 1
+
+            if statePos + stateLen > len(packetContents):
+                self._logger.error(
+                    f"Failed to find message of length {stateLen + (statePos - pos)} at pos {pos}. Abort."
+                )
+                break
+
+            unitId = packetContents[pos]
+            if unitId == 0x00:
+                # Network config. Skipping.
+                pass
+            elif unitId == 0xFF:
+                # Log marker. Skipping.
+                pass
+            elif unitId == 0xF0:
+                # Response
+                self._logger.info(
+                    f"Got unit response {b2a(packetContents[pos:statePos + stateLen])}. Not yet implemented."
+                )
+            else:
+                state = packetContents[statePos:stateLen]
+
+                self._logger.debug(
+                    f"Parsed state: Id {id}, prio {prio}, online {online}, state {b2a(state)}1"
+                )
+
+                # It's ok to parse anything as on. The value will only be used if no appropriate controls are available.
+                self._dataCallback(
+                    IncomingPacketType.UnitState,
+                    {"id": id, "online": online, "on": False, "state": state},
+                )
+                pass
+
+            pos = statePos + stateLen
+
+    async def _sendInternal(self, packet: bytes) -> None:
+        sequence = int.to_bytes(self._outPacketCount & 0xFFFF, 2, "big")
+        if sequence == b"\0":
+            sequence = b"\x01"
+            self._outPacketCount += 1
+
+        outPacket = sequence + packet
+        if self._managerEncryptor:
+            outPacket = b"\x03" + self._managerEncryptor.digest(
+                outPacket, self._connhash
+            )
+        else:
+            outPacket = b"\x02" + self._visitorEncryptor.digest(
+                outPacket, self._connhash
+            )
+
+        try:
+            await self._gattClient.write_gatt_char(CASA_AUTH_CHAR_UUID, outPacket)
+        except BleakError as e:
+            if e.args[0] == "Not connected":
+                self._connectionState = ConnectionState.NONE
+            else:
+                raise e
+
+    def _getPacketContents(self, data: bytes) -> bytes:
+        authLevel = data[0]
+        if (
+            authLevel == CLASSIC_AUTH_LEVEL_MANAGER
+            and self._managerEncryptor is not None
+        ):
+            return self._managerEncryptor.verify(data[1:], self._connhash)
+        if authLevel == CLASSIC_AUTH_LEVEL_VISITOR:
+            return self._visitorEncryptor.verify(data[1:], self._connhash)
+        else:
+            raise ProtocolError(
+                f"Unexpected auth level {authLevel} in packet {b2a(data)}"
+            )

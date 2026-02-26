@@ -9,6 +9,7 @@ from typing import Any, cast
 from bleak.backends.device import BLEDevice
 from httpx import AsyncClient, RequestError
 
+from CasambiBt._constants import IncomingPacketType
 from CasambiBt._switch import SwitchEvent
 
 from ._cache import Cache
@@ -17,10 +18,14 @@ from ._client import (
     CasambiClientClassic,
     CasambiClientEvolution,
     ConnectionState,
-    IncommingPacketType,
 )
 from ._network import Network
-from ._operation import OpCode, OperationsContext
+from ._operation import (
+    OpCode,
+    OperationsContext,
+    OperationsContextClassic,
+    OperationsContextEvolution,
+)
 from ._unit import Group, Scene, Unit, UnitControlType, UnitState
 from .errors import ConnectionStateError, ProtocolError
 
@@ -45,7 +50,7 @@ class Casambi:
         self._disconnectCallbacks: list[Callable[[], None]] = []
 
         self._logger = logging.getLogger(__name__)
-        self._opContext = OperationsContext()
+        self._opContext: OperationsContext
         self._ownHttpClient = httpClient is None
         self._httpClient = httpClient
 
@@ -162,6 +167,7 @@ class Casambi:
                 self._disconnectCallback,
                 self._casaNetwork,
             )
+            self._opContext = OperationsContextClassic()
         else:
             self._casaClient = CasambiClientEvolution(
                 addr_or_device,
@@ -169,6 +175,7 @@ class Casambi:
                 self._disconnectCallback,
                 self._casaNetwork,
             )
+            self._opContext = OperationsContextEvolution()
         await self._connectClient()
 
     async def _connectClient(self) -> None:
@@ -375,24 +382,11 @@ class Casambi:
                 ConnectionState.NONE,
             )
 
-        targetCode = 0
-        if isinstance(target, Unit):
-            assert target.deviceId <= 0xFF
-            targetCode = (target.deviceId << 8) | 0x01
-        elif isinstance(target, Group):
-            assert target.groudId <= 0xFF
-            targetCode = (target.groudId << 8) | 0x02
-        elif isinstance(target, Scene):
-            assert target.sceneId <= 0xFF
-            targetCode = (target.sceneId << 8) | 0x04
-        elif target is not None:
-            raise TypeError(f"Unkown target type {type(target)}")
-
         self._logger.debug(
-            f"Sending operation {opcode.name} with payload {b2a(state)} for {targetCode:x}"
+            f"Sending operation {opcode.name} with payload {b2a(state)}."
         )
 
-        opPkt = self._opContext.prepareOperation(opcode, targetCode, state)
+        opPkt = self._opContext.prepareOperation(opcode, target, state)
 
         try:
             await self._casaClient.send(opPkt)

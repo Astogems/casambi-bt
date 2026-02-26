@@ -26,4 +26,8 @@ class IncomingPacketType(IntEnum):
 MIN_EVO_VERSION: Final[int] = 10
 MAX_EVO_VERSION: Final[int] = 11
 FIRST_EVO_VERSION: Final[int] = 10
-SUPPORTED_CLASSIC_VERSION: Final[int] = 5
+MIN_SUPPORTED_CLASSIC_VERSION: Final[int] = 5
+
+
+CLASSIC_AUTH_LEVEL_MANAGER: Final = 3
+CLASSIC_AUTH_LEVEL_VISITOR: Final = 2

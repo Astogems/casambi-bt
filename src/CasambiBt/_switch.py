@@ -30,9 +30,7 @@ class SwitchEvent:
     extra_data: bytes
 
 
-def parseSwitchEvents(
-    data: bytes, packet_seq: int, raw_packet: bytes
-) -> list[SwitchEvent]:
+def parseSwitchEvents(data: bytes, packet_seq: int) -> list[SwitchEvent]:
     """Parse switch event packet which contains multiple message types."""
 
     # Log complete packet structure with marker
