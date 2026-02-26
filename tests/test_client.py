@@ -9,7 +9,12 @@ from bleak_retry_connector import BleakNotFoundError
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from CasambiBt._client import CasambiClient
-from CasambiBt._constants import CASA_AUTH_CHAR_UUID, ConnectionState, MIN_VERSION, IncomingPacketType
+from CasambiBt._constants import (
+    CASA_AUTH_CHAR_UUID,
+    MIN_VERSION,
+    ConnectionState,
+    IncomingPacketType,
+)
 from CasambiBt._network import Network
 from CasambiBt.errors import (
     BluetoothError,
@@ -39,12 +44,18 @@ def disconnected_callback() -> MagicMock:
 
 
 @pytest.fixture
-def client(mock_network: MagicMock, data_callback: MagicMock, disconnected_callback: MagicMock) -> CasambiClient:
-    return CasambiClient("00:11:22:33:44:55", data_callback, disconnected_callback, mock_network)
+def client(
+    mock_network: MagicMock, data_callback: MagicMock, disconnected_callback: MagicMock
+) -> CasambiClient:
+    return CasambiClient(
+        "00:11:22:33:44:55", data_callback, disconnected_callback, mock_network
+    )
 
 
 def test_init_valid(mock_network, data_callback, disconnected_callback):
-    client = CasambiClient("00:11:22:33:44:55", data_callback, disconnected_callback, mock_network)
+    client = CasambiClient(
+        "00:11:22:33:44:55", data_callback, disconnected_callback, mock_network
+    )
     assert client.address == "00:11:22:33:44:55"
     assert client._connectionState == ConnectionState.NONE
 
@@ -52,7 +63,9 @@ def test_init_valid(mock_network, data_callback, disconnected_callback):
 def test_init_unsupported_version(mock_network, data_callback, disconnected_callback):
     mock_network.protocolVersion = MIN_VERSION - 1
     with pytest.raises(UnsupportedProtocolVersion):
-        CasambiClient("00:11:22:33:44:55", data_callback, disconnected_callback, mock_network)
+        CasambiClient(
+            "00:11:22:33:44:55", data_callback, disconnected_callback, mock_network
+        )
 
 
 async def test_connect_wrong_state(client):
@@ -89,7 +102,9 @@ async def test_connect_device_not_found(mock_get_device, client):
 @patch("CasambiBt._client.get_device")
 @patch("CasambiBt._client.establish_connection")
 @patch("CasambiBt._client.close_stale_connections")
-async def test_connect_bleak_not_found(mock_close, mock_establish, mock_get_device, client):
+async def test_connect_bleak_not_found(
+    mock_close, mock_establish, mock_get_device, client
+):
     mock_device = MagicMock(spec=BLEDevice)
     mock_get_device.return_value = mock_device
     mock_establish.side_effect = BleakNotFoundError()
@@ -129,6 +144,7 @@ def test_on_disconnect(client, disconnected_callback):
     disconnected_callback.assert_called_once()
     assert client._connectionState == ConnectionState.NONE
 
+
 async def test_exchange_key_success(client):
     client._connectionState = ConnectionState.CONNECTED
     client._gattClient = AsyncMock()
@@ -155,6 +171,7 @@ async def test_exchange_key_success(client):
             client._exchNofityCallback(None, callback_data_1)
             await asyncio.sleep(0.05)
             client._exchNofityCallback(None, callback_data_2)
+
         asyncio.create_task(send_callbacks())  # noqa: RUF006
 
     client._gattClient.start_notify.side_effect = mock_start_notify
@@ -165,6 +182,7 @@ async def test_exchange_key_success(client):
     client._gattClient.start_notify.assert_called_once()
     assert client._connectionState == ConnectionState.AUTHENTICATED
     assert hasattr(client, "_encryptor")
+
 
 async def test_authenticate_success(client, mock_network):
     mock_key = MagicMock()
@@ -183,6 +201,7 @@ async def test_authenticate_success(client, mock_network):
         async def send_callbacks():
             await asyncio.sleep(0)
             client._notifySignal.set()
+
         asyncio.create_task(send_callbacks())  # noqa: RUF006
 
     client._gattClient.write_gatt_char.side_effect = mock_write
@@ -191,6 +210,7 @@ async def test_authenticate_success(client, mock_network):
 
     client._gattClient.write_gatt_char.assert_called_once()
     assert client._connectionState == ConnectionState.AUTHENTICATED
+
 
 def test_parse_unit_states(client, data_callback):
     client._connectionState = ConnectionState.AUTHENTICATED
