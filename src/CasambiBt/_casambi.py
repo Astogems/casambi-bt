@@ -358,11 +358,15 @@ class Casambi:
         :param target: One or multiple targeted units.
         :return: Nothing is returned by this function. To get the new state register a change handler.
         """
+        self._checkNetwork()
 
-        # Use -1 to indicate special packet format
-        # Use RestoreLastLevel flag (1) and UseFullTimeFlag (4).
-        # Not sure what UseFullTime does but this is what the app uses.
-        await self._send(target, b"\xff\x05", OpCode.SetLevel)
+        if CasambiClient.isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
+            await self._send(target, b"\xff\x01\x00\x00\x01", OpCode.SetLevel)
+        else:
+            # Use -1 to indicate special packet format
+            # Use RestoreLastLevel flag (1) and UseFullTimeFlag (4).
+            # Not sure what UseFullTime does but this is what the app uses.
+            await self._send(target, b"\xff\x05", OpCode.SetLevel)
 
     async def switchToScene(self, target: Scene, level: int = 0xFF) -> None:
         """Switch the network to a predefined scene.
@@ -401,7 +405,7 @@ class Casambi:
     def _dataCallback(
         self, packetType: IncomingPacketType, data: dict[str, Any] | SwitchEvent
     ) -> None:
-        self._logger.info(f"Incomming data callback of type {packetType}")
+        self._logger.info(f"Incomming data callback of type {str(packetType)}")
         if packetType == IncomingPacketType.UnitState:
             unitData = cast(dict[str, Any], data)
             self._logger.debug(

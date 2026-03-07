@@ -4,6 +4,8 @@ import pickle
 from dataclasses import dataclass
 from typing import Final
 
+from CasambiBt._constants import CLASSIC_AUTH_LEVEL_MANAGER, CLASSIC_AUTH_LEVEL_VISITOR
+
 from ._cache import Cache
 
 
@@ -83,9 +85,13 @@ class KeyStore:
         await self._save()
 
     async def setLegacyKey(self, key: str, isVisitor: bool) -> None:
-        keyRole = -2 if isVisitor else -1
+        keyRole = (
+            CLASSIC_AUTH_LEVEL_VISITOR if isVisitor else CLASSIC_AUTH_LEVEL_MANAGER
+        )
         keyBytes = binascii.a2b_hex(key)
         for i, k in enumerate(self._keys):
+            if k.type != -1:  # Not a legacy key
+                continue
             if k.role == keyRole:
                 if k.key == keyBytes:
                     return
@@ -115,7 +121,7 @@ class KeyStore:
 
     def getLegacyKey(self, role: int) -> Key | None:
         for k in self._keys:
-            if k.type != -1:  # Legacy key
+            if k.type != -1:  # Not a legacy key
                 continue
             elif k.role == role:
                 return k

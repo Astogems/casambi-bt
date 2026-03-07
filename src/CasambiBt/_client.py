@@ -104,7 +104,7 @@ class CasambiClient(ABC):
         self._logger.info(f"Connection to {self.address}")
 
         # Reset packet counters
-        self._outPacketCount = 2
+        self._outPacketCount = 1
         self._inPacketCount = 1
 
         # Reset callback queue
@@ -164,6 +164,8 @@ class CasambiClient(ABC):
             await self._activityLock.acquire()
             try:
                 self._callbackMulitplexer(handle, data)
+            except Exception:
+                self._logger.error("Failed to process callback.", exc_info=True)
             finally:
                 self._callbackQueue.task_done()
                 self._activityLock.release()
@@ -437,6 +439,7 @@ class CasambiClientEvolution(CasambiClient):
             authPacket += key.id.to_bytes(1, "little")
             authPacket += authDig
             await self._writeEncPacket(authPacket, 1, CASA_AUTH_CHAR_UUID)
+            self._outPacketCount += 1
         finally:
             self._activityLock.release()
 
@@ -608,7 +611,7 @@ class CasambiClientClassic(CasambiClient):
         super().__init__(address_or_device, dataCallback, disonnectedCallback, network)
 
     def _checkProtocolVersion(self, version: int) -> None:
-        if version < FIRST_EVO_VERSION:
+        if version >= FIRST_EVO_VERSION:
             raise UnsupportedProtocolVersion(
                 "Evolution networks aren't supported by this class."
             )
@@ -641,7 +644,7 @@ class CasambiClientClassic(CasambiClient):
                 self._mtu,
                 protocolVersion,
                 flags_high,
-            ) = struct.unpack_from(">8sBBBBB", firstResp, 2)
+            ) = struct.unpack_from(">8sBBBBB", firstResp)
             self._flags = flags_lo | (flags_high << 8)
 
             if protocolVersion != self._network.protocolVersion:
@@ -680,7 +683,9 @@ class CasambiClientClassic(CasambiClient):
         try:
             # We only send the version for now and not the time.
             self._logger.info("Sending version.")
-            await self.send(b"\x00\x01\x0b")
+            await self._sendInternal(b"\x00\x01\x0b")
+            # Manually increment since we have to bypass send due to locking.
+            self._outPacketCount += 1
 
             self._connectionState = ConnectionState.AUTHENTICATED
         finally:
@@ -694,57 +699,55 @@ class CasambiClientClassic(CasambiClient):
     def _establishedNotifyCallback(
         self, handle: BleakGATTCharacteristic, data: bytes
     ) -> None:
-        try:
-            packetContents = self._getPacketContents(data)
-        except InvalidSignature:
-            # We only drop packets with invalid signature here instead of going into an error state
-            self._logger.error(f"Invalid signature for packet {b2a(data)}!")
-            return
+        self._logger.debug(f"Incoming data: {b2a(data)}")
 
-        pos = 0
-        while pos < len(packetContents):
-            if pos + 2 > len(packetContents):
-                self._logger.error(f"Failed to find header at {pos}. Abort.")
-                break
+        unitId = data[0]
+        if unitId == 0x00:
+            # Network config. Skipping.
+            pass
+        elif unitId == 0xFF:
+            # Log marker. Skipping.
+            pass
+        elif unitId == 0xF0:
+            # Response
+            pass
+        else:
+            pos = 0
+            while pos < len(data):
+                if pos + 2 > len(data):
+                    self._logger.error(f"Failed to find header at {pos}. Abort.")
+                    break
 
-            flags = packetContents[pos + 1]
+                flags = data[pos + 1]
 
-            stateLen = flags & 0x0F
-            prio = flags & 0x10 != 0
-            extra1 = flags & 0x20 != 0
-            extra2 = flags & 0x40 != 0
-            online = flags & 0x80 != 0
+                stateLen = flags & 0x0F
+                prio = flags & 0x10 != 0
+                extra1 = flags & 0x20 != 0
+                extra2 = flags & 0x40 != 0
+                online = flags & 0x80 != 0
 
-            statePos = pos + 2
+                statePos = pos + 2
+                extra1Val = -1
+                extra2Val = -1
 
-            if extra1:
-                statePos += 1
-            if extra2:
-                statePos += 1
+                if extra1:
+                    extra1Val = data[statePos]
+                    statePos += 1
+                if extra2:
+                    extra2Val = data[statePos]
+                    statePos += 1
 
-            if statePos + stateLen > len(packetContents):
-                self._logger.error(
-                    f"Failed to find message of length {stateLen + (statePos - pos)} at pos {pos}. Abort."
-                )
-                break
+                if statePos + stateLen > len(data):
+                    self._logger.error(
+                        f"Failed to find message of length {stateLen + (statePos - pos)} at pos {pos}. Abort."
+                    )
+                    break
 
-            unitId = packetContents[pos]
-            if unitId == 0x00:
-                # Network config. Skipping.
-                pass
-            elif unitId == 0xFF:
-                # Log marker. Skipping.
-                pass
-            elif unitId == 0xF0:
-                # Response
-                self._logger.info(
-                    f"Got unit response {b2a(packetContents[pos:statePos + stateLen])}. Not yet implemented."
-                )
-            else:
-                state = packetContents[statePos : statePos + stateLen]
+                unitId = data[pos]
+                state = data[statePos : statePos + stateLen]
 
                 self._logger.debug(
-                    f"Parsed state: Id {unitId}, prio {prio}, online {online}, state {b2a(state)}1"
+                    f"Parsed state: Len {stateLen}, id {unitId}, prio {prio}, online {online}, extra1 {extra1Val}, extra2 {extra2Val}, state {b2a(state)}."
                 )
 
                 # It's ok to parse anything as on. The value will only be used if no appropriate controls are available.
@@ -752,9 +755,8 @@ class CasambiClientClassic(CasambiClient):
                     IncomingPacketType.UnitState,
                     {"id": unitId, "online": online, "on": False, "state": state},
                 )
-                pass
 
-            pos = statePos + stateLen
+                pos = statePos + stateLen
 
     async def _sendInternal(self, packet: bytes) -> None:
         sequence = int.to_bytes(self._outPacketCount & 0xFFFF, 2, "big")
@@ -772,6 +774,8 @@ class CasambiClientClassic(CasambiClient):
                 outPacket, self._connhash
             )
 
+        self._logger.debug(f"Packet with header: {b2a(outPacket)}")
+
         try:
             await self._gattClient.write_gatt_char(CASA_AUTH_CHAR_UUID, outPacket)
         except BleakError as e:
@@ -779,17 +783,3 @@ class CasambiClientClassic(CasambiClient):
                 self._connectionState = ConnectionState.NONE
             else:
                 raise e
-
-    def _getPacketContents(self, data: bytes) -> bytes:
-        authLevel = data[0]
-        if (
-            authLevel == CLASSIC_AUTH_LEVEL_MANAGER
-            and self._managerEncryptor is not None
-        ):
-            return self._managerEncryptor.verify(data[1:], self._connhash)
-        if authLevel == CLASSIC_AUTH_LEVEL_VISITOR:
-            return self._visitorEncryptor.verify(data[1:], self._connhash)
-        else:
-            raise ProtocolError(
-                f"Unexpected auth level {authLevel} in packet {b2a(data)}"
-            )

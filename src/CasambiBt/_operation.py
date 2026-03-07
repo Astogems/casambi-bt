@@ -78,10 +78,14 @@ class OperationsContextEvolution(OperationsContext):
 
 
 class OperationsContextClassic(OperationsContext):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lifetime = 200
+
     def prepareOperation(
         self, op: OpCode, target: Unit | Group | Scene | None, payload: bytes
     ) -> bytes:
-        if len(payload) > 63:
+        if len(payload) > 16:
             raise ValueError("Payload too long")
 
         if self._origin > 255:
@@ -89,7 +93,7 @@ class OperationsContextClassic(OperationsContext):
 
         # We always send origin, so set 0x40
         flags = _classicOpcodeMap[op][type(target)] | 0x40
-        packet = bytearray(3)
+        packet = bytearray(4)
 
         targetId = None
         if isinstance(target, Unit):
@@ -105,10 +109,10 @@ class OperationsContextClassic(OperationsContext):
 
         packet[1] = flags
         packet[2] = self._origin
+        packet[3] = self.lifetime
 
         packet += payload
 
-        # Set length. No idea where that weird calculation is from
         packet[0] = (len(packet) + 239) & 0xFF
 
         self._origin += 1
