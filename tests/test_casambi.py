@@ -6,7 +6,11 @@ from httpx import RequestError
 
 from CasambiBt._casambi import Casambi
 from CasambiBt._client import ConnectionState, IncomingPacketType
-from CasambiBt._operation import OpCode
+from CasambiBt._operation import (
+    OpCode,
+    OperationsContextClassic,
+    OperationsContextEvolution,
+)
 from CasambiBt._switch import ButtonEventType, SwitchEvent
 from CasambiBt._unit import Group, Scene, Unit, UnitControl, UnitControlType, UnitType
 from CasambiBt.errors import ConnectionStateError
@@ -20,7 +24,13 @@ def mock_network_class():
 
 @pytest.fixture
 def mock_client_class():
-    with patch("CasambiBt._casambi.CasambiClient") as mock:
+    with patch("CasambiBt._casambi.CasambiClientEvolution") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_client_classic_class():
+    with patch("CasambiBt._casambi.CasambiClientClassic") as mock:
         yield mock
 
 
@@ -100,6 +110,7 @@ def connected_casambi(casambi, mock_unit, mock_group, mock_scene):
     mock_network.units = [mock_unit]
     mock_network.groups = [mock_group]
     mock_network.scenes = [mock_scene]
+    mock_network.protocolVersion = 10
 
     # Setup mock client
     mock_client = AsyncMock()
@@ -107,6 +118,30 @@ def connected_casambi(casambi, mock_unit, mock_group, mock_scene):
 
     casambi._casaNetwork = mock_network
     casambi._casaClient = mock_client
+    casambi._opContext = OperationsContextEvolution()
+    return casambi
+
+
+@pytest.fixture
+def connected_casambi_classic(casambi, mock_unit, mock_group, mock_scene):
+    # Setup mock network
+    mock_network = MagicMock()
+    mock_network.disconnect = AsyncMock()
+    mock_network._networkRevision = 1
+    mock_network._networkName = "Test Network Classic"
+    mock_network._id = "test-id-classic"
+    mock_network.units = [mock_unit]
+    mock_network.groups = [mock_group]
+    mock_network.scenes = [mock_scene]
+    mock_network.protocolVersion = 5
+
+    # Setup mock client
+    mock_client = AsyncMock()
+    mock_client._connectionState = ConnectionState.AUTHENTICATED
+
+    casambi._casaNetwork = mock_network
+    casambi._casaClient = mock_client
+    casambi._opContext = OperationsContextClassic()
     return casambi
 
 
@@ -143,6 +178,7 @@ async def test_connect(casambi, mock_network_class, mock_client_class):
     mock_network_inst.load = AsyncMock()
     mock_network_inst.logIn = AsyncMock()
     mock_network_inst.update = AsyncMock()
+    mock_network_inst.protocolVersion = 10
 
     mock_client_inst = mock_client_class.return_value
     mock_client_inst.connect = AsyncMock()
@@ -164,6 +200,33 @@ async def test_connect(casambi, mock_network_class, mock_client_class):
     mock_client_inst.authenticate.assert_called_once()
 
 
+async def test_connect_classic(casambi, mock_network_class, mock_client_classic_class):
+    mock_network_inst = mock_network_class.return_value
+    mock_network_inst.load = AsyncMock()
+    mock_network_inst.logIn = AsyncMock()
+    mock_network_inst.update = AsyncMock()
+    mock_network_inst.protocolVersion = 5
+
+    mock_client_inst = mock_client_classic_class.return_value
+    mock_client_inst.connect = AsyncMock()
+    mock_client_inst.exchangeKey = AsyncMock()
+    mock_client_inst.authenticate = AsyncMock()
+
+    device = MagicMock(spec=BLEDevice)
+    device.address = "00:11:22:33:44:55"
+    await casambi.connect(device, "password")
+
+    mock_network_class.assert_called_once()
+    mock_network_inst.load.assert_called_once()
+    mock_network_inst.logIn.assert_called_once_with("password", False)
+    mock_network_inst.update.assert_called_once_with(False)
+
+    mock_client_classic_class.assert_called_once()
+    mock_client_inst.connect.assert_called_once()
+    mock_client_inst.exchangeKey.assert_called_once()
+    mock_client_inst.authenticate.assert_called_once()
+
+
 async def test_connect_offline_fallback(casambi, mock_network_class, mock_client_class):
     mock_network_inst = mock_network_class.return_value
     mock_network_inst.load = AsyncMock()
@@ -171,6 +234,7 @@ async def test_connect_offline_fallback(casambi, mock_network_class, mock_client
     # Simulate RequestError during logIn
     mock_network_inst.logIn = AsyncMock(side_effect=RequestError("Error"))
     mock_network_inst.update = AsyncMock()
+    mock_network_inst.protocolVersion = 10
 
     mock_client_inst = mock_client_class.return_value
     mock_client_inst.connect = AsyncMock()
@@ -195,6 +259,17 @@ async def test_set_level_valid(connected_casambi, mock_unit):
     assert pkt[-1] == 128
 
 
+async def test_set_level_valid_classic(connected_casambi_classic, mock_unit):
+    await connected_casambi_classic.setLevel(mock_unit, 128)
+    # Check what was sent
+    connected_casambi_classic._casaClient.send.assert_called_once()
+    args, _ = connected_casambi_classic._casaClient.send.call_args
+    pkt = args[0]
+    # Header is 5 bytes, followed by payload
+    assert len(pkt) == 6  # 5 byte header + 1 byte payload
+    assert pkt[-1] == 128
+
+
 async def test_set_level_invalid(connected_casambi, mock_unit):
     with pytest.raises(ValueError):
         await connected_casambi.setLevel(mock_unit, 256)
@@ -207,9 +282,19 @@ async def test_set_color(connected_casambi, mock_unit):
     connected_casambi._casaClient.send.assert_called_once()
 
 
+async def test_set_color_classic(connected_casambi_classic, mock_unit):
+    await connected_casambi_classic.setColor(mock_unit, (255, 0, 0))
+    connected_casambi_classic._casaClient.send.assert_called_once()
+
+
 async def test_set_color_xy(connected_casambi, mock_xy_unit):
     await connected_casambi.setColorXY(mock_xy_unit, (0.5, 0.5))
     connected_casambi._casaClient.send.assert_called_once()
+
+
+async def test_set_color_xy_classic(connected_casambi_classic, mock_xy_unit):
+    with pytest.raises(KeyError):
+        await connected_casambi_classic.setColorXY(mock_xy_unit, (0.5, 0.5))
 
 
 async def test_set_color_xy_invalid(connected_casambi, mock_unit, mock_xy_unit):
@@ -229,9 +314,22 @@ async def test_turn_on(connected_casambi, mock_unit):
     assert pkt[-2:] == b"\xff\x05"
 
 
+async def test_turn_on_classic(connected_casambi_classic, mock_unit):
+    await connected_casambi_classic.turnOn(mock_unit)
+    connected_casambi_classic._casaClient.send.assert_called_once()
+    args, _ = connected_casambi_classic._casaClient.send.call_args
+    pkt = args[0]
+    assert pkt[-5:] == b"\xff\x01\x00\x00\x01"
+
+
 async def test_switch_to_scene(connected_casambi, mock_scene):
     await connected_casambi.switchToScene(mock_scene)
     connected_casambi._casaClient.send.assert_called_once()
+
+
+async def test_switch_to_scene_classic(connected_casambi_classic, mock_scene):
+    await connected_casambi_classic.switchToScene(mock_scene)
+    connected_casambi_classic._casaClient.send.assert_called_once()
 
 
 async def test_send_unsupported_target(connected_casambi):

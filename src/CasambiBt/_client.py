@@ -592,6 +592,7 @@ class CasambiClientClassic(CasambiClient):
         disonnectedCallback: Callable[[], None],
         network: Network,
     ) -> None:
+        super().__init__(address_or_device, dataCallback, disonnectedCallback, network)
         self._connhash: bytes
 
         visitorKey = network.keyStore.getLegacyKey(CLASSIC_AUTH_LEVEL_VISITOR)
@@ -608,7 +609,6 @@ class CasambiClientClassic(CasambiClient):
             self._logger.warning(
                 "No manager key in keystore. Manager level packets won't be handled correctly."
             )
-        super().__init__(address_or_device, dataCallback, disonnectedCallback, network)
 
     def _checkProtocolVersion(self, version: int) -> None:
         if version >= FIRST_EVO_VERSION:

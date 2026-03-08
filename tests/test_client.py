@@ -8,10 +8,10 @@ from bleak.exc import BleakError
 from bleak_retry_connector import BleakNotFoundError
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from CasambiBt._client import CasambiClient
+from CasambiBt._client import CasambiClientEvolution
 from CasambiBt._constants import (
     CASA_AUTH_CHAR_UUID,
-    MIN_VERSION,
+    MIN_EVO_VERSION,
     ConnectionState,
     IncomingPacketType,
 )
@@ -46,14 +46,14 @@ def disconnected_callback() -> MagicMock:
 @pytest.fixture
 def client(
     mock_network: MagicMock, data_callback: MagicMock, disconnected_callback: MagicMock
-) -> CasambiClient:
-    return CasambiClient(
+) -> CasambiClientEvolution:
+    return CasambiClientEvolution(
         "00:11:22:33:44:55", data_callback, disconnected_callback, mock_network
     )
 
 
 def test_init_valid(mock_network, data_callback, disconnected_callback):
-    client = CasambiClient(
+    client = CasambiClientEvolution(
         "00:11:22:33:44:55", data_callback, disconnected_callback, mock_network
     )
     assert client.address == "00:11:22:33:44:55"
@@ -61,9 +61,9 @@ def test_init_valid(mock_network, data_callback, disconnected_callback):
 
 
 def test_init_unsupported_version(mock_network, data_callback, disconnected_callback):
-    mock_network.protocolVersion = MIN_VERSION - 1
+    mock_network.protocolVersion = MIN_EVO_VERSION - 1
     with pytest.raises(UnsupportedProtocolVersion):
-        CasambiClient(
+        CasambiClientEvolution(
             "00:11:22:33:44:55", data_callback, disconnected_callback, mock_network
         )
 
@@ -168,9 +168,9 @@ async def test_exchange_key_success(client):
     async def mock_start_notify(*args, **kwargs):
         async def send_callbacks():
             await asyncio.sleep(0)
-            client._exchNofityCallback(None, callback_data_1)
+            client._exchNotifyCallback(None, callback_data_1)
             await asyncio.sleep(0.05)
-            client._exchNofityCallback(None, callback_data_2)
+            client._exchNotifyCallback(None, callback_data_2)
 
         asyncio.create_task(send_callbacks())  # noqa: RUF006
 
@@ -193,7 +193,7 @@ async def test_authenticate_success(client, mock_network):
     client._connectionState = ConnectionState.KEY_EXCHANGED
     client._gattClient = AsyncMock()
     client._nonce = b"1234567890123456"
-    client._transportKey = b"1234567890123456"
+    client._key = b"1234567890123456"
     client._encryptor = MagicMock()
     client._encryptor.encryptThenMac.return_value = b"encrypted_packet"
 
