@@ -29,5 +29,9 @@ FIRST_EVO_VERSION: Final[int] = 10
 MIN_SUPPORTED_CLASSIC_VERSION: Final[int] = 5
 
 
+def isClassicNetwork(version: int) -> bool:
+    return version < FIRST_EVO_VERSION
+
+
 CLASSIC_AUTH_LEVEL_MANAGER: Final = 3
 CLASSIC_AUTH_LEVEL_VISITOR: Final = 2

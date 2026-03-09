@@ -90,10 +90,6 @@ class CasambiClient(ABC):
     def _checkProtocolVersion(self, version: int) -> None:
         pass
 
-    @staticmethod
-    def isClassicNetwork(version: int) -> bool:
-        return version < FIRST_EVO_VERSION
-
     def _checkState(self, desired: ConnectionState) -> None:
         if self._connectionState != desired:
             raise ConnectionStateError(desired, self._connectionState)

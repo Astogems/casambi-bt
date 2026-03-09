@@ -290,7 +290,7 @@ async def test_set_color_classic(connected_casambi_classic, mock_unit):
     connected_casambi_classic._casaClient.send.assert_called_once()
     args, _ = connected_casambi_classic._casaClient.send.call_args
     pkt = args[0]
-    assert pkt[-3:] == b"\x00\x00\xff"
+    assert pkt[-3:] == b"\xff\x00\x00"
 
 
 async def test_set_color_xy(connected_casambi, mock_xy_unit):

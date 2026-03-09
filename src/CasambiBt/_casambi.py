@@ -19,6 +19,7 @@ from ._client import (
     CasambiClientEvolution,
     ConnectionState,
 )
+from ._constants import isClassicNetwork
 from ._network import Network
 from ._operation import (
     OpCode,
@@ -160,7 +161,7 @@ class Casambi:
 
         await self._casaNetwork.update(forceOffline)
 
-        if CasambiClient.isClassicNetwork(self._casaNetwork.protocolVersion):
+        if isClassicNetwork(self._casaNetwork.protocolVersion):
             self._casaClient = CasambiClientClassic(
                 addr_or_device,
                 self._dataCallback,
@@ -286,11 +287,13 @@ class Casambi:
         :raises ValueError: The supplied rgbColor isn't in range
         """
 
-        state = UnitState()
-        state.rgb = rgbColor
-        hs: tuple[float, float] = state.hs  # type: ignore[assignment]
-
-        payload = UnitState.payload_from_hs(hs)
+        if isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
+            payload = UnitState.payload_from_rgb(rgbColor)
+        else:
+            state = UnitState()
+            state.rgb = rgbColor
+            hs: tuple[float, float] = state.hs  # type: ignore[assignment]
+            payload = UnitState.payload_from_hs(hs)
         await self._send(target, payload, OpCode.SetColor)
 
     async def setTemperature(
@@ -352,7 +355,7 @@ class Casambi:
         """
         self._checkNetwork()
 
-        if CasambiClient.isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
+        if isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
             await self._send(target, b"\xff\x01\x00\x00\x01", OpCode.SetLevel)
         else:
             # Use -1 to indicate special packet format

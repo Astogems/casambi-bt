@@ -288,9 +288,11 @@ class UnitState:
     @staticmethod
     def int_from_hs(hs: tuple[float, float], length: int) -> int:
         hueLen = (length * 10) // 18
-        hueMask = 2**hueLen - 1
+        assert hueLen > 0, "Invalid HS length"
+        hueMask: int = 2**hueLen - 1
         satLen = length - hueLen
-        satMask = 2**satLen - 1
+        assert satLen > 0, "Invalid HS length"
+        satMask: int = 2**satLen - 1
 
         h, s = hs
         return ((round(h * hueMask) & hueMask) << satLen) + (
@@ -300,9 +302,11 @@ class UnitState:
     @staticmethod
     def hs_from_int(val: int, length: int) -> tuple[float, float]:
         hueLen = (length * 10) // 18
-        hueMask = 2**hueLen - 1
+        assert hueLen > 0, "Invalid HS length"
+        hueMask: int = 2**hueLen - 1
         satLen = length - hueLen
-        satMask = 2**satLen - 1
+        assert satLen > 0, "Invalid HS length"
+        satMask: int = 2**satLen - 1
 
         h = (val >> satLen) / hueMask
         s = (val & satMask) / satMask
@@ -314,7 +318,7 @@ class UnitState:
         scale = UnitState.RGB_RESOLUTION - (length // 3)
         scaledValue = 0
         for i in range(3):
-            scaledValue += (rgb[i] >> scale) * 2 ** ((length // 3) * (2 - i))
+            scaledValue += (rgb[i] >> scale) * 2 ** ((length // 3) * i)
         return scaledValue
 
     @staticmethod
@@ -325,22 +329,24 @@ class UnitState:
         scale = UnitState.RGB_RESOLUTION - compLen
 
         for i in range(3):
-            v = (val >> ((2 - i) * compLen)) & (2**compLen - 1)
+            v = (val >> (i * compLen)) & (2**compLen - 1)
             v <<= scale
             rgb.append(v)
-        return tuple(rgb)  # type: ignore[return-value]
+        return tuple(rgb)
 
     @staticmethod
     def int_from_xy(xy: tuple[float, float], length: int) -> int:
         coordLen = length // 2
+        assert coordLen > 0, "Invalid XY length"
         x, y = xy
-        xyMask = 2**coordLen - 1
+        xyMask: int = 2**coordLen - 1
         return (round(x * xyMask) << coordLen) | round(y * xyMask)
 
     @staticmethod
     def xy_from_int(val: int, length: int) -> tuple[float, float]:
         coordLen = length // 2
-        xyMask = 2**coordLen - 1
+        assert coordLen > 0, "Invalid XY length"
+        xyMask: int = 2**coordLen - 1
         y = val & xyMask
         x = (val >> coordLen) & xyMask
         return (x / xyMask, y / xyMask)
@@ -350,7 +356,8 @@ class UnitState:
         temperature: int, min_temp: int, max_temp: int, length: int
     ) -> int:
         clampedTemp = min(max_temp, max(min_temp, temperature))
-        tempMask = 2**length - 1
+        assert length > 0, "Invalid temp length"
+        tempMask: int = 2**length - 1
         return (tempMask * (clampedTemp - min_temp)) // (max_temp - min_temp)
 
     @staticmethod
@@ -358,7 +365,8 @@ class UnitState:
         val: int, min_temp: int, max_temp: int, length: int
     ) -> int:
         tempRange = max_temp - min_temp
-        tempMask = 2**length - 1
+        assert length > 0, "Invalid temp length"
+        tempMask: int = 2**length - 1
         return int(((val / tempMask) * tempRange) + min_temp)
 
     @staticmethod
@@ -371,6 +379,11 @@ class UnitState:
         )
 
     @staticmethod
+    def payload_from_rgb(rgb: tuple[int, int, int], length: int = 24) -> bytes:
+        val = UnitState.int_from_rgb(rgb, length)
+        return val.to_bytes(3, byteorder="little", signed=False)
+
+    @staticmethod
     def payload_from_xy(xy: tuple[float, float], length: int = 22) -> bytes:
         val = UnitState.int_from_xy(xy, length)
         return val.to_bytes(3, byteorder="little", signed=False)
@@ -378,7 +391,7 @@ class UnitState:
     @staticmethod
     def payload_from_temperature(temperature: int) -> bytes:
         temp = int(temperature / 50)
-        return temp.to_bytes(1, byteorder="big", signed=False)
+        return temp.to_bytes(1, byteorder="little", signed=False)
 
 
 # TODO: Make unit immutable (refactor state, on, online out of it)
@@ -407,6 +420,7 @@ class Unit:
     _state: UnitState | None = None
     _on: bool = False
     _online: bool = False
+    _isClassic: bool = False
 
     @property
     def state(self) -> UnitState | None:
@@ -449,7 +463,10 @@ class Unit:
                 scale = UnitState.VERTICAL_RESOLUTION - c.length
                 scaledValue = state.vertical >> scale
             elif c.type == UnitControlType.RGB and state.rgb is not None:
-                scaledValue = UnitState.int_from_hs(state.hs, c.length)  # type: ignore[arg-type]
+                if self._isClassic:
+                    scaledValue = UnitState.int_from_rgb(state.rgb, c.length)
+                else:
+                    scaledValue = UnitState.int_from_hs(state.hs, c.length)  # type: ignore[arg-type]
             elif c.type == UnitControlType.WHITE and state.white is not None:
                 scale = UnitState.WHITE_RESOLUTION - c.length
                 scaledValue = state.white >> scale
@@ -520,7 +537,10 @@ class Unit:
                 scale = UnitState.VERTICAL_RESOLUTION - c.length
                 self._state.vertical = cInt << scale
             elif c.type == UnitControlType.RGB:
-                self._state.hs = UnitState.hs_from_int(cInt, c.length)
+                if self._isClassic:
+                    self._state.rgb = UnitState.rgb_from_int(cInt, c.length)
+                else:
+                    self._state.hs = UnitState.hs_from_int(cInt, c.length)
             elif c.type == UnitControlType.WHITE:
                 scale = UnitState.WHITE_RESOLUTION - c.length
                 self._state.white = cInt << scale

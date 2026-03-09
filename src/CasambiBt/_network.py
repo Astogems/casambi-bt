@@ -9,7 +9,7 @@ import httpx
 from httpx import AsyncClient, RequestError
 
 from ._cache import Cache
-from ._constants import DEVICE_NAME
+from ._constants import DEVICE_NAME, isClassicNetwork
 from ._keystore import KeyStore
 from ._unit import Group, Scene, Unit, UnitControl, UnitControlType, UnitType
 from .errors import (
@@ -281,6 +281,7 @@ class Network:
                 u["name"],
                 str(u["firmware"]),
                 uType,
+                _isClassic=isClassicNetwork(self._protocolVersion),
             )
             self.units.append(uObj)
 
@@ -334,7 +335,7 @@ class Network:
             cachedType, cacheExpiry = self._unitTypes[id]
 
             # We don't want to cache types forever so use an expiry date.
-            if cacheExpiry < datetime.utcnow():
+            if cacheExpiry < datetime.now(UTC):
                 self._logger.info("Cache expiry for type %i. Refetching.", id)
                 self._unitTypes.pop(id)
             else:
@@ -348,7 +349,7 @@ class Network:
             self._logger.error(f"Getting unit info returned {res.status_code}")
             self._unitTypes[id] = (
                 None,
-                datetime.utcnow() + timedelta(days=7),
+                datetime.now(UTC) + timedelta(days=7),
             )
             return None
 
@@ -391,7 +392,7 @@ class Network:
         # Chache unit type
         self._unitTypes[unitTypeObj.id] = (
             unitTypeObj,
-            datetime.utcnow() + timedelta(days=28),
+            datetime.now(UTC) + timedelta(days=28),
         )
 
         self._logger.info("Sucessfully fetched unit type.")
