@@ -267,9 +267,63 @@ def test_unit_serialization_rgb():
     assert unit.state.rgb is not None
     r, g, b = unit.state.rgb
     # Conversion might be lossy, allow some tolerance
-    assert r > 250
-    assert g < 5
-    assert b < 5
+    assert r == 255
+    assert g == 0
+    assert b == 0
+
+
+@pytest.mark.parametrize(
+    "color, expected_bytes",
+    [
+        ((255, 0, 0), b"\xff\x00\x00"),
+        ((0, 255, 0), b"\x00\xff\x00"),
+        ((0, 0, 255), b"\x00\x00\xff"),
+        ((123, 45, 67), b"\x7b\x2d\x43"),
+    ],
+)
+def test_unit_serialization_rgb_classic(color, expected_bytes):
+    # RGB control
+    controls = [
+        UnitControl(
+            type=UnitControlType.RGB, offset=0, length=24, default=0, readonly=False
+        )
+    ]
+    ut = UnitType(
+        id=1,
+        model="test",
+        manufacturer="test",
+        mode="test",
+        stateLength=3,
+        controls=controls,
+    )
+    unit = Unit(
+        _typeId=1,
+        deviceId=1,
+        uuid="1",
+        address="1",
+        name="1",
+        firmwareVersion="1",
+        unitType=ut,
+        _isClassic=True,
+    )
+
+    state = UnitState()
+    state.rgb = color
+
+    data = unit.getStateAsBytes(state)
+    assert data == expected_bytes
+
+    # Verify we can read it back
+    unit._state = None
+    unit.setStateFromBytes(data)
+
+    assert unit.state is not None
+    assert unit.state.rgb is not None
+    r, g, b = unit.state.rgb
+    # Conversion might be lossy, allow some tolerance
+    assert r == color[0]
+    assert g == color[1]
+    assert b == color[2]
 
 
 def test_unit_serialization_mixed():

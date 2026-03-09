@@ -286,3 +286,198 @@ async def test_load_session_and_types(network: Network, cache: Cache):
     assert network._session is not None
     assert network._session.session == "token"
     assert network._unitTypes == unit_types
+
+
+async def test_update_parse_units(network: Network, mock_client: AsyncMock):
+    """Test parsing of units during network update."""
+    network._session = _NetworkSession(
+        "sess", "net", True, 1, datetime.now(UTC) + timedelta(days=1)
+    )
+    network._id = "test-net"
+
+    network_data = {
+        "status": "UPDATED",
+        "network": {
+            "revision": 2,
+            "name": "My Network",
+            "protocolVersion": 10,
+            "units": [
+                {
+                    "type": 10,
+                    "deviceID": 1,
+                    "uuid": "unit-uuid",
+                    "address": "00:11:22:33:44:55",
+                    "name": "My Unit",
+                    "firmware": "1.0",
+                }
+            ],
+            "grid": {"cells": []},
+            "scenes": [],
+        },
+    }
+    mock_client.put.return_value = httpx.Response(
+        200, json=network_data, content=json.dumps(network_data).encode()
+    )
+    mock_client.get.return_value = httpx.Response(
+        200,
+        json={
+            "id": 10,
+            "model": "Test Model",
+            "vendor": "Test Vendor",
+            "mode": "Test Mode",
+            "stateLength": 4,
+            "controls": [],
+        },
+    )
+
+    await network.update()
+
+    assert len(network.units) == 1
+    unit = network.units[0]
+    assert unit.deviceId == 1
+    assert unit.uuid == "unit-uuid"
+    assert unit.address == "00:11:22:33:44:55"
+    assert unit.name == "My Unit"
+    assert unit.firmwareVersion == "1.0"
+    assert unit.unitType.id == 10
+    assert unit._isClassic is False
+
+
+async def test_update_parse_groups(network: Network, mock_client: AsyncMock):
+    """Test parsing of groups (cells) during network update."""
+    network._session = _NetworkSession(
+        "sess", "net", True, 1, datetime.now(UTC) + timedelta(days=1)
+    )
+    network._id = "test-net"
+
+    network_data = {
+        "status": "UPDATED",
+        "network": {
+            "revision": 2,
+            "name": "My Network",
+            "protocolVersion": 10,
+            "units": [
+                {
+                    "type": 10,
+                    "deviceID": 1,
+                    "uuid": "unit-uuid",
+                    "address": "00:11:22:33:44:55",
+                    "name": "My Unit",
+                    "firmware": "1.0",
+                }
+            ],
+            "grid": {
+                "cells": [
+                    {
+                        "type": 2,
+                        "groupID": 100,
+                        "name": "My Group",
+                        "cells": [{"type": 1, "unit": 1}],
+                    }
+                ]
+            },
+            "scenes": [],
+        },
+    }
+    mock_client.put.return_value = httpx.Response(
+        200, json=network_data, content=json.dumps(network_data).encode()
+    )
+    mock_client.get.return_value = httpx.Response(
+        200,
+        json={
+            "id": 10,
+            "model": "Test Model",
+            "vendor": "Test Vendor",
+            "mode": "Test Mode",
+            "stateLength": 4,
+            "controls": [],
+        },
+    )
+
+    await network.update()
+
+    assert len(network.groups) == 1
+    group = network.groups[0]
+    assert group.groudId == 100
+    assert group.name == "My Group"
+    assert len(group.units) == 1
+    assert group.units[0].deviceId == 1
+
+
+async def test_update_parse_scenes(network: Network, mock_client: AsyncMock):
+    """Test parsing of scenes during network update."""
+    network._session = _NetworkSession(
+        "sess", "net", True, 1, datetime.now(UTC) + timedelta(days=1)
+    )
+    network._id = "test-net"
+
+    network_data = {
+        "status": "UPDATED",
+        "network": {
+            "revision": 2,
+            "name": "My Network",
+            "protocolVersion": 10,
+            "units": [],
+            "grid": {"cells": []},
+            "scenes": [{"sceneID": 200, "name": "My Scene"}],
+        },
+    }
+    mock_client.put.return_value = httpx.Response(
+        200, json=network_data, content=json.dumps(network_data).encode()
+    )
+
+    await network.update()
+
+    assert len(network.scenes) == 1
+    scene = network.scenes[0]
+    assert scene.sceneId == 200
+    assert scene.name == "My Scene"
+
+
+async def test_update_classic_network(network: Network, mock_client: AsyncMock):
+    """Test successful network data update via API for a classic network."""
+    network._session = _NetworkSession(
+        "sess", "net", True, 1, datetime.now(UTC) + timedelta(days=1)
+    )
+    network._id = "test-net"
+
+    network_data = {
+        "status": "UPDATED",
+        "network": {
+            "revision": 2,
+            "name": "Classic Network",
+            "protocolVersion": 5,
+            "units": [
+                {
+                    "type": 10,
+                    "deviceID": 1,
+                    "uuid": "unit-uuid",
+                    "address": "00:11:22:33:44:55",
+                    "name": "My Unit",
+                    "firmware": "1.0",
+                }
+            ],
+            "grid": {"cells": []},
+            "scenes": [],
+        },
+    }
+    mock_client.put.return_value = httpx.Response(
+        200, json=network_data, content=json.dumps(network_data).encode()
+    )
+    mock_client.get.return_value = httpx.Response(
+        200,
+        json={
+            "id": 10,
+            "model": "Test Model",
+            "vendor": "Test Vendor",
+            "mode": "Test Mode",
+            "stateLength": 4,
+            "controls": [],
+        },
+    )
+
+    await network.update()
+
+    assert network.protocolVersion == 5
+    assert len(network.units) == 1
+    assert network.units[0]._isClassic is True

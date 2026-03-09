@@ -9,12 +9,24 @@ from typing import Any, cast
 from bleak.backends.device import BLEDevice
 from httpx import AsyncClient, RequestError
 
+from CasambiBt._constants import IncomingPacketType
 from CasambiBt._switch import SwitchEvent
 
 from ._cache import Cache
-from ._client import CasambiClient, ConnectionState, IncomingPacketType
+from ._client import (
+    CasambiClient,
+    CasambiClientClassic,
+    CasambiClientEvolution,
+    ConnectionState,
+)
+from ._constants import isClassicNetwork
 from ._network import Network
-from ._operation import OpCode, OperationsContext
+from ._operation import (
+    OpCode,
+    OperationsContext,
+    OperationsContextClassic,
+    OperationsContextEvolution,
+)
 from ._unit import Group, Scene, Unit, UnitControlType, UnitState
 from .errors import ConnectionStateError, ProtocolError
 
@@ -39,7 +51,7 @@ class Casambi:
         self._disconnectCallbacks: list[Callable[[], None]] = []
 
         self._logger = logging.getLogger(__name__)
-        self._opContext = OperationsContext()
+        self._opContext: OperationsContext
         self._ownHttpClient = httpClient is None
         self._httpClient = httpClient
 
@@ -149,12 +161,22 @@ class Casambi:
 
         await self._casaNetwork.update(forceOffline)
 
-        self._casaClient = CasambiClient(
-            addr_or_device,
-            self._dataCallback,
-            self._disconnectCallback,
-            self._casaNetwork,
-        )
+        if isClassicNetwork(self._casaNetwork.protocolVersion):
+            self._casaClient = CasambiClientClassic(
+                addr_or_device,
+                self._dataCallback,
+                self._disconnectCallback,
+                self._casaNetwork,
+            )
+            self._opContext = OperationsContextClassic()
+        else:
+            self._casaClient = CasambiClientEvolution(
+                addr_or_device,
+                self._dataCallback,
+                self._disconnectCallback,
+                self._casaNetwork,
+            )
+            self._opContext = OperationsContextEvolution()
         await self._connectClient()
 
     async def _connectClient(self) -> None:
@@ -265,15 +287,13 @@ class Casambi:
         :raises ValueError: The supplied rgbColor isn't in range
         """
 
-        state = UnitState()
-        state.rgb = rgbColor
-        hs: tuple[float, float] = state.hs  # type: ignore[assignment]
-        hue = round(hs[0] * 1023)
-        sat = round(hs[1] * 255)
-
-        payload = hue.to_bytes(2, byteorder="little", signed=False) + sat.to_bytes(
-            1, byteorder="little", signed=False
-        )
+        if isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
+            payload = UnitState.payload_from_rgb(rgbColor)
+        else:
+            state = UnitState()
+            state.rgb = rgbColor
+            hs: tuple[float, float] = state.hs  # type: ignore[assignment]
+            payload = UnitState.payload_from_hs(hs)
         await self._send(target, payload, OpCode.SetColor)
 
     async def setTemperature(
@@ -291,8 +311,7 @@ class Casambi:
         :raises ValueError: The supplied temperature isn't in range
         """
 
-        temperature = int(temperature / 50)
-        payload = temperature.to_bytes(1, byteorder="big", signed=False)
+        payload = UnitState.payload_from_temperature(temperature)
         await self._send(target, payload, OpCode.SetTemperature)
 
     async def setColorXY(
@@ -314,17 +333,14 @@ class Casambi:
             raise ValueError("Color out of range.")
 
         # We assume a default length of 22 bits, so 11 bits per coordinate. Is this sane?
-        coordLen = 11
+        length = 22
         if target is not None and isinstance(target, Unit):
             control = target.unitType.get_control(UnitControlType.XY)
             if control is None:
                 raise ValueError("The control isn't supported by this unit.")
-            coordLen = control.length // 2
-        mask = (1 << coordLen) - 1
-        x = round(xyColor[0] * mask) & mask
-        y = round(xyColor[1] * mask) & mask
+            length = control.length
 
-        payload = ((x << coordLen) | y).to_bytes(3, byteorder="little", signed=False)
+        payload = UnitState.payload_from_xy(xyColor, length)
         await self._send(target, payload, OpCode.SetColorXY)
 
     async def turnOn(self, target: Unit | Group | None) -> None:
@@ -337,11 +353,15 @@ class Casambi:
         :param target: One or multiple targeted units.
         :return: Nothing is returned by this function. To get the new state register a change handler.
         """
+        self._checkNetwork()
 
-        # Use -1 to indicate special packet format
-        # Use RestoreLastLevel flag (1) and UseFullTimeFlag (4).
-        # Not sure what UseFullTime does but this is what the app uses.
-        await self._send(target, b"\xff\x05", OpCode.SetLevel)
+        if isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
+            await self._send(target, b"\xff\x01\x00\x00\x01", OpCode.SetLevel)
+        else:
+            # Use -1 to indicate special packet format
+            # Use RestoreLastLevel flag (1) and UseFullTimeFlag (4).
+            # Not sure what UseFullTime does but this is what the app uses.
+            await self._send(target, b"\xff\x05", OpCode.SetLevel)
 
     async def switchToScene(self, target: Scene, level: int = 0xFF) -> None:
         """Switch the network to a predefined scene.
@@ -361,24 +381,11 @@ class Casambi:
                 ConnectionState.NONE,
             )
 
-        targetCode = 0
-        if isinstance(target, Unit):
-            assert target.deviceId <= 0xFF
-            targetCode = (target.deviceId << 8) | 0x01
-        elif isinstance(target, Group):
-            assert target.groudId <= 0xFF
-            targetCode = (target.groudId << 8) | 0x02
-        elif isinstance(target, Scene):
-            assert target.sceneId <= 0xFF
-            targetCode = (target.sceneId << 8) | 0x04
-        elif target is not None:
-            raise TypeError(f"Unkown target type {type(target)}")
-
         self._logger.debug(
-            f"Sending operation {opcode.name} with payload {b2a(state)} for {targetCode:x}"
+            f"Sending operation {opcode.name} with payload {b2a(state)}."
         )
 
-        opPkt = self._opContext.prepareOperation(opcode, targetCode, state)
+        opPkt = self._opContext.prepareOperation(opcode, target, state)
 
         try:
             await self._casaClient.send(opPkt)
@@ -393,7 +400,7 @@ class Casambi:
     def _dataCallback(
         self, packetType: IncomingPacketType, data: dict[str, Any] | SwitchEvent
     ) -> None:
-        self._logger.info(f"Incomming data callback of type {packetType}")
+        self._logger.info(f"Incomming data callback of type {str(packetType)}")
         if packetType == IncomingPacketType.UnitState:
             unitData = cast(dict[str, Any], data)
             self._logger.debug(
