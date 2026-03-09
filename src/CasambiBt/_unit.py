@@ -191,7 +191,7 @@ class UnitState:
 
     @hs.setter
     def hs(self, value: tuple[float, float]) -> None:
-        """Convert HS color to interal RBG representation where H is a float in [0..1[ and S a float in [0..1]."""
+        """Convert HS color to internal RBG representation where H is a float in [0..1[ and S a float in [0..1]."""
         h, s = value
 
         rgb = hsv_to_rgb(h, s, 1)
@@ -285,6 +285,101 @@ class UnitState:
     def __repr__(self) -> str:
         return f"UnitState(dimmer={self.dimmer}, vertical={self.vertical}, rgb={self.rgb.__repr__()}, white={self.white}, temperature={self.temperature}, colorsource={self.colorsource}, xy={self.xy}, slider={self.slider}, onoff={self.onoff})"
 
+    @staticmethod
+    def int_from_hs(hs: tuple[float, float], length: int) -> int:
+        hueLen = (length * 10) // 18
+        hueMask = 2**hueLen - 1
+        satLen = length - hueLen
+        satMask = 2**satLen - 1
+
+        h, s = hs
+        return ((round(h * hueMask) & hueMask) << satLen) + (
+            round(s * satMask) & satMask
+        )
+
+    @staticmethod
+    def hs_from_int(val: int, length: int) -> tuple[float, float]:
+        hueLen = (length * 10) // 18
+        hueMask = 2**hueLen - 1
+        satLen = length - hueLen
+        satMask = 2**satLen - 1
+
+        h = (val >> satLen) / hueMask
+        s = (val & satMask) / satMask
+        return (h, s)
+
+    @staticmethod
+    def int_from_rgb(rgb: tuple[int, int, int], length: int) -> int:
+        assert length % 3 == 0, "Invalid RGB length"
+        scale = UnitState.RGB_RESOLUTION - (length // 3)
+        scaledValue = 0
+        for i in range(3):
+            scaledValue += (rgb[i] >> scale) * 2 ** ((length // 3) * (2 - i))
+        return scaledValue
+
+    @staticmethod
+    def rgb_from_int(val: int, length: int) -> tuple[int, int, int]:
+        assert length % 3 == 0, "Invalid RGB length"
+        compLen = length // 3
+        rgb = []
+        scale = UnitState.RGB_RESOLUTION - compLen
+
+        for i in range(3):
+            v = (val >> ((2 - i) * compLen)) & (2**compLen - 1)
+            v <<= scale
+            rgb.append(v)
+        return tuple(rgb)  # type: ignore[return-value]
+
+    @staticmethod
+    def int_from_xy(xy: tuple[float, float], length: int) -> int:
+        coordLen = length // 2
+        x, y = xy
+        xyMask = 2**coordLen - 1
+        return (round(x * xyMask) << coordLen) | round(y * xyMask)
+
+    @staticmethod
+    def xy_from_int(val: int, length: int) -> tuple[float, float]:
+        coordLen = length // 2
+        xyMask = 2**coordLen - 1
+        y = val & xyMask
+        x = (val >> coordLen) & xyMask
+        return (x / xyMask, y / xyMask)
+
+    @staticmethod
+    def int_from_temperature(
+        temperature: int, min_temp: int, max_temp: int, length: int
+    ) -> int:
+        clampedTemp = min(max_temp, max(min_temp, temperature))
+        tempMask = 2**length - 1
+        return (tempMask * (clampedTemp - min_temp)) // (max_temp - min_temp)
+
+    @staticmethod
+    def temperature_from_int(
+        val: int, min_temp: int, max_temp: int, length: int
+    ) -> int:
+        tempRange = max_temp - min_temp
+        tempMask = 2**length - 1
+        return int(((val / tempMask) * tempRange) + min_temp)
+
+    @staticmethod
+    def payload_from_hs(hs: tuple[float, float]) -> bytes:
+        val = UnitState.int_from_hs(hs, 18)
+        hue = val >> 8
+        sat = val & 0xFF
+        return hue.to_bytes(2, byteorder="little", signed=False) + sat.to_bytes(
+            1, byteorder="little", signed=False
+        )
+
+    @staticmethod
+    def payload_from_xy(xy: tuple[float, float], length: int = 22) -> bytes:
+        val = UnitState.int_from_xy(xy, length)
+        return val.to_bytes(3, byteorder="little", signed=False)
+
+    @staticmethod
+    def payload_from_temperature(temperature: int) -> bytes:
+        temp = int(temperature / 50)
+        return temp.to_bytes(1, byteorder="big", signed=False)
+
 
 # TODO: Make unit immutable (refactor state, on, online out of it)
 @dataclass(init=True, repr=True)
@@ -354,49 +449,25 @@ class Unit:
                 scale = UnitState.VERTICAL_RESOLUTION - c.length
                 scaledValue = state.vertical >> scale
             elif c.type == UnitControlType.RGB and state.rgb is not None:
-                hueLen = (c.length * 10) // 18
-                hueMask = 2**hueLen - 1
-                satLen = c.length - hueLen
-                satMask = 2**satLen - 1
-
-                h, s = state.hs  # type: ignore[misc]
-
-                scaledValue = ((round(h * hueMask) & hueMask) << satLen) + (
-                    round(s * satMask) & satMask
-                )
-
-                # Old RGB code (might still be useful for earlier protocol versions):
-                """
-                assert c.length % 3 == 0, "Invalid RGB length"
-                scale = UnitState.RGB_RESOLUTION - (c.length // 3)
-                scaledValue = 0
-                value = state.rgb
-                for i in range(3):
-                    scaledValue += (value[i] >> scale) * 2 ** (
-                        (c.length // 3) * (2 - i)
-                    )
-                """
+                scaledValue = UnitState.int_from_hs(state.hs, c.length)  # type: ignore[arg-type]
             elif c.type == UnitControlType.WHITE and state.white is not None:
                 scale = UnitState.WHITE_RESOLUTION - c.length
                 scaledValue = state.white >> scale
             elif (
                 c.type == UnitControlType.TEMPERATURE
                 and state.temperature is not None
-                and c.min
-                and c.max
+                and c.min is not None
+                and c.max is not None
             ):
-                clampedTemp = min(c.max, max(c.min, state.temperature))
-                tempMask = 2**c.length - 1
-                scaledValue = (tempMask * (clampedTemp - c.min)) // (c.max - c.min)
+                scaledValue = UnitState.int_from_temperature(
+                    state.temperature, c.min, c.max, c.length
+                )
             elif (
                 c.type == UnitControlType.COLORSOURCE and state.colorsource is not None
             ):
                 scaledValue = state.colorsource.value
             elif c.type == UnitControlType.XY and state.xy is not None:
-                coordLen = c.length // 2
-                x, y = state.xy
-                xyMask = 2**coordLen - 1
-                scaledValue = (round(x * xyMask) << coordLen) | round(y * xyMask)
+                scaledValue = UnitState.int_from_xy(state.xy, c.length)
             elif c.type == UnitControlType.SLIDER and state.slider is not None:
                 scale = UnitState.SLIDER_RESOLUTION - c.length
                 scaledValue = state.slider >> scale
@@ -449,48 +520,21 @@ class Unit:
                 scale = UnitState.VERTICAL_RESOLUTION - c.length
                 self._state.vertical = cInt << scale
             elif c.type == UnitControlType.RGB:
-                hueLen = (c.length * 10) // 18
-                hueMask = 2**hueLen - 1
-                satLen = c.length - hueLen
-                satMask = 2**satLen - 1
-
-                h = (cInt >> satLen) / hueMask
-                s = (cInt & satMask) / satMask
-
-                self._state.hs = (h, s)
-                # Old RGB Code (might still be useful for earlier protocol versions):
-                """
-                assert c.length % 3 == 0, "Invalid RGB length"
-                compLen = c.length // 3
-                rgb = []
-                scale = UnitState.RGB_RESOLUTION - compLen
-
-                # Extract components from int and scale them
-                for i in range(3):
-                    v = (cInt >> ((2 - i) * compLen)) & (2 ** compLen - 1)
-                    v <<= scale
-                    rgb.append(v)
-                self._state.rgb = tuple(rgb)
-                """
+                self._state.hs = UnitState.hs_from_int(cInt, c.length)
             elif c.type == UnitControlType.WHITE:
                 scale = UnitState.WHITE_RESOLUTION - c.length
                 self._state.white = cInt << scale
             elif c.type == UnitControlType.TEMPERATURE:
-                if not c.max or not c.min:
+                if c.max is None or c.min is None:
                     _LOGGER.warning("Can't set temperature when min or max unknown.")
                     continue
-                tempRange = c.max - c.min
-                tempMask = 2**c.length - 1
-                # TODO: We should probalby try to make this number a bit more round
-                self._state.temperature = int(((cInt / tempMask) * tempRange) + c.min)
+                self._state.temperature = UnitState.temperature_from_int(
+                    cInt, c.min, c.max, c.length
+                )
             elif c.type == UnitControlType.COLORSOURCE:
                 self._state.colorsource = ColorSource(cInt)
             elif c.type == UnitControlType.XY:
-                coordLen = c.length // 2
-                xyMask = 2**coordLen - 1
-                y = cInt & xyMask
-                x = (cInt >> coordLen) & xyMask
-                self._state.xy = (x / xyMask, y / xyMask)
+                self._state.xy = UnitState.xy_from_int(cInt, c.length)
             elif c.type == UnitControlType.SLIDER:
                 scale = UnitState.SLIDER_RESOLUTION - c.length
                 self._state.slider = cInt << scale

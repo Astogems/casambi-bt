@@ -267,9 +267,9 @@ def test_unit_serialization_rgb():
     assert unit.state.rgb is not None
     r, g, b = unit.state.rgb
     # Conversion might be lossy, allow some tolerance
-    assert r > 250
-    assert g < 5
-    assert b < 5
+    assert r == 255
+    assert g == 0
+    assert b == 0
 
 
 def test_unit_serialization_mixed():

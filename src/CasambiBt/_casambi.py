@@ -289,12 +289,8 @@ class Casambi:
         state = UnitState()
         state.rgb = rgbColor
         hs: tuple[float, float] = state.hs  # type: ignore[assignment]
-        hue = round(hs[0] * 1023)
-        sat = round(hs[1] * 255)
 
-        payload = hue.to_bytes(2, byteorder="little", signed=False) + sat.to_bytes(
-            1, byteorder="little", signed=False
-        )
+        payload = UnitState.payload_from_hs(hs)
         await self._send(target, payload, OpCode.SetColor)
 
     async def setTemperature(
@@ -312,8 +308,7 @@ class Casambi:
         :raises ValueError: The supplied temperature isn't in range
         """
 
-        temperature = int(temperature / 50)
-        payload = temperature.to_bytes(1, byteorder="big", signed=False)
+        payload = UnitState.payload_from_temperature(temperature)
         await self._send(target, payload, OpCode.SetTemperature)
 
     async def setColorXY(
@@ -335,17 +330,14 @@ class Casambi:
             raise ValueError("Color out of range.")
 
         # We assume a default length of 22 bits, so 11 bits per coordinate. Is this sane?
-        coordLen = 11
+        length = 22
         if target is not None and isinstance(target, Unit):
             control = target.unitType.get_control(UnitControlType.XY)
             if control is None:
                 raise ValueError("The control isn't supported by this unit.")
-            coordLen = control.length // 2
-        mask = (1 << coordLen) - 1
-        x = round(xyColor[0] * mask) & mask
-        y = round(xyColor[1] * mask) & mask
+            length = control.length
 
-        payload = ((x << coordLen) | y).to_bytes(3, byteorder="little", signed=False)
+        payload = UnitState.payload_from_xy(xyColor, length)
         await self._send(target, payload, OpCode.SetColorXY)
 
     async def turnOn(self, target: Unit | Group | None) -> None:

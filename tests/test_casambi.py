@@ -280,16 +280,36 @@ async def test_set_level_invalid(connected_casambi, mock_unit):
 async def test_set_color(connected_casambi, mock_unit):
     await connected_casambi.setColor(mock_unit, (255, 0, 0))
     connected_casambi._casaClient.send.assert_called_once()
+    args, _ = connected_casambi._casaClient.send.call_args
+    pkt = args[0]
+    assert pkt[-3:] == b"\x00\x00\xff"
 
 
 async def test_set_color_classic(connected_casambi_classic, mock_unit):
     await connected_casambi_classic.setColor(mock_unit, (255, 0, 0))
     connected_casambi_classic._casaClient.send.assert_called_once()
+    args, _ = connected_casambi_classic._casaClient.send.call_args
+    pkt = args[0]
+    assert pkt[-3:] == b"\x00\x00\xff"
 
 
 async def test_set_color_xy(connected_casambi, mock_xy_unit):
     await connected_casambi.setColorXY(mock_xy_unit, (0.5, 0.5))
     connected_casambi._casaClient.send.assert_called_once()
+    args, _ = connected_casambi._casaClient.send.call_args
+    pkt = args[0]
+    # x = 0.5, mask = 2047 -> 1024. y = 1024
+    # (1024 << 11) | 1024 = 2098176 -> b'\x00\x04\x20' in little endian
+    assert pkt[-3:] == b"\x00\x04\x20"
+
+
+async def test_set_temperature(connected_casambi, mock_unit):
+    await connected_casambi.setTemperature(mock_unit, 4000)
+    connected_casambi._casaClient.send.assert_called_once()
+    args, _ = connected_casambi._casaClient.send.call_args
+    pkt = args[0]
+    # 4000 / 50 = 80 -> b'\x50'
+    assert pkt[-1:] == b"\x50"
 
 
 async def test_set_color_xy_classic(connected_casambi_classic, mock_xy_unit):
