@@ -129,6 +129,7 @@ class Casambi:
         :raises NetworkNotFoundError: No network was found under the supplied address.
         :raises NetworkOnlineUpdateNeededError: An offline update isn't possible in the current state.
         :raises BluetoothError: An error occurred in the bluetooth stack.
+        :raises BluetoothDeviceNotFoundError: The bluetooth device belonging to the network can't be found.
         """
 
         if isinstance(addr_or_device, BLEDevice):

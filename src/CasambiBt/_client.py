@@ -38,9 +38,9 @@ from ._network import Network
 
 # We need to move these imports here to prevent a cycle.
 from .errors import (  # noqa: E402
+    BluetoothDeviceNotFoundError,
     BluetoothError,
     ConnectionStateError,
-    NetworkNotFoundError,
     ProtocolError,
     UnsupportedProtocolVersion,
 )
@@ -115,7 +115,7 @@ class CasambiClient(ABC):
 
         if not device:
             self._logger.error("Failed to discover unit.")
-            raise NetworkNotFoundError
+            raise BluetoothDeviceNotFoundError
 
         try:
             # If we are already connected to the device the key exchange will fail.
@@ -127,7 +127,7 @@ class CasambiClient(ABC):
         except BleakNotFoundError as e:
             # Guess that this is the error reason since there are no better error types
             self._logger.error("Failed to find unit.", exc_info=True)
-            raise NetworkNotFoundError from e
+            raise BluetoothDeviceNotFoundError from e
         except BleakError as e:
             self._logger.error("Failed to connect.", exc_info=True)
             raise BluetoothError(e.args) from e
