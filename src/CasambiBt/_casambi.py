@@ -205,8 +205,8 @@ class Casambi:
                 self._casaNetwork,
             )
             self._opContext = OperationsContextEvolution()
-        await self._casaClient.connect()
         try:
+            await self._casaClient.connect()
             await self._casaClient.exchangeKey()
             await self._casaClient.authenticate()
         except:
@@ -219,6 +219,7 @@ class Casambi:
         :param target: The targeted unit.
         :param state: The desired state.
         :return: Nothing is returned by this function. To get the new state register a change handler.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         stateBytes = target.getStateAsBytes(state)
         await self._send(target, stateBytes, OpCode.SetState)
@@ -234,6 +235,7 @@ class Casambi:
         :param level: The desired level in range [0, 255]. If 0 the unit is turned off.
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied level isn't in range
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         if level < 0 or level > 255:
             raise ValueError()
@@ -252,6 +254,7 @@ class Casambi:
         :param vertical: The desired vertical balance in range [0, 255]. If 0 the unit is turned off.
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied level isn't in range
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         if vertical < 0 or vertical > 255:
             raise ValueError()
@@ -270,6 +273,7 @@ class Casambi:
         :param value: The desired value in range [0, 255].
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied level isn't in range
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         if value < 0 or value > 255:
             raise ValueError()
@@ -288,6 +292,7 @@ class Casambi:
         :param level: The desired level in range [0, 255].
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied level isn't in range
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         if level < 0 or level > 255:
             raise ValueError()
@@ -308,6 +313,7 @@ class Casambi:
         :param rgbColor: The desired color as a tuple of three ints in range [0, 255].
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied rgbColor isn't in range
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
 
         if isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
@@ -332,6 +338,7 @@ class Casambi:
         :param temperature: The desired temperature in degrees Kelvin.
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied temperature isn't in range
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
 
         payload = UnitState.payload_from_temperature(temperature)
@@ -350,6 +357,7 @@ class Casambi:
         :param xyColor: The desired color as a pair of floats in the range [0.0, 1.0].
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises ValueError: The supplied XYColor isn't in range or not supported by the supplied unit.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
 
         if xyColor[0] < 0.0 or xyColor[0] > 1.0 or xyColor[1] < 0.0 or xyColor[1] > 1.0:
@@ -375,6 +383,7 @@ class Casambi:
 
         :param target: One or multiple targeted units.
         :return: Nothing is returned by this function. To get the new state register a change handler.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         self._checkNetwork()
 
@@ -392,6 +401,7 @@ class Casambi:
         :param target: The scene to switch to.
         :param level: An optional relative brightness for all units in the scene.
         :return: Nothing is returned by this function. To get the new state register a change handler.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
         """
         await self.setLevel(target, level)  # type: ignore[arg-type]
 
@@ -415,7 +425,7 @@ class Casambi:
         except ConnectionStateError as exc:
             if exc.got == ConnectionState.NONE:
                 self._logger.info("Trying to reconnect broken connection once.")
-                await self._connectClient()
+                await self._connectClient(self._casaClient._address_or_devive)
                 await self._casaClient.send(opPkt)
             else:
                 raise exc
