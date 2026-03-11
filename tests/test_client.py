@@ -17,9 +17,9 @@ from CasambiBt._constants import (
 )
 from CasambiBt._network import Network
 from CasambiBt.errors import (
+    BluetoothDeviceNotFoundError,
     BluetoothError,
     ConnectionStateError,
-    NetworkNotFoundError,
     UnsupportedProtocolVersion,
 )
 
@@ -95,7 +95,7 @@ async def test_connect_success(mock_close, mock_establish, mock_get_device, clie
 async def test_connect_device_not_found(mock_get_device, client):
     mock_get_device.return_value = None
 
-    with pytest.raises(NetworkNotFoundError):
+    with pytest.raises(BluetoothDeviceNotFoundError):
         await client.connect()
 
 
@@ -109,7 +109,7 @@ async def test_connect_bleak_not_found(
     mock_get_device.return_value = mock_device
     mock_establish.side_effect = BleakNotFoundError()
 
-    with pytest.raises(NetworkNotFoundError):
+    with pytest.raises(BluetoothDeviceNotFoundError):
         await client.connect()
 
 
