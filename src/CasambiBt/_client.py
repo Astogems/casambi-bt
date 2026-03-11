@@ -209,7 +209,7 @@ class CasambiClient(ABC):
     ) -> None:
         pass
 
-    async def send(self, packet: bytes) -> None:
+    async def send(self, packet: bytes, retries: int = 2) -> None:
         self._checkState(ConnectionState.AUTHENTICATED)
 
         await self._activityLock.acquire()
@@ -223,7 +223,7 @@ class CasambiClient(ABC):
                     await self._sendInternal(packet)
                     break
                 except BluetoothError:
-                    if retry > 2:
+                    if retry > retries:
                         raise
                     retry += 1
                     await asyncio.sleep(0.5)
