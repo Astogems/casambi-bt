@@ -217,7 +217,16 @@ class CasambiClient(ABC):
             self._logger.debug(
                 f"Sending packet {b2a(packet)} with counter {self._outPacketCount}"
             )
-            await self._sendInternal(packet)
+            retry = 0
+            while True:
+                try:
+                    await self._sendInternal(packet)
+                    break
+                except BluetoothError:
+                    if retry > 2:
+                        raise
+                    retry += 1
+                    await asyncio.sleep(0.5)
 
             self._outPacketCount += 1
         finally:
