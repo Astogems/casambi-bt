@@ -28,7 +28,7 @@ from ._operation import (
     OperationsContextEvolution,
 )
 from ._unit import Group, Scene, Unit, UnitControlType, UnitState
-from .errors import ConnectionStateError, ProtocolError
+from .errors import ConnectionStateError
 
 
 class Casambi:
@@ -161,6 +161,33 @@ class Casambi:
             forceOffline = True
 
         await self._casaNetwork.update(forceOffline)
+        await self._connectClient(addr_or_device)
+
+    async def reconnect(self, addr_or_device: str | BLEDevice) -> None:
+        """Reestablish the bluetooth connection. Only works after initial connection attempt and before disconnect has been called.
+
+        :param addr: The MAC address of the network or a BLEDevice. Use `discover` to find the address of a network.
+        :param password: The password for the network.
+        :raises ProtocolError: The network did not follow the expected protocol.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
+        :raises BluetoothDeviceNotFoundError: The bluetooth device belonging to the network can't be found.
+        """
+
+        self._checkNetwork()
+        if self._casaClient is None:
+            raise ConnectionStateError(
+                ConnectionState.CONNECTED,
+                ConnectionState.NONE,
+                "Reconnect only possible after initial connection and before disconnect.",
+            )
+        if self._casaClient._connectionState != ConnectionState.NONE:
+            await self._casaClient.disconnect()
+
+        await self._connectClient(addr_or_device)
+
+    async def _connectClient(self, addr_or_device: str | BLEDevice) -> None:
+        """Initiate the bluetooth connection."""
+        self._casaNetwork = cast(Network, self._casaNetwork)
 
         if isClassicNetwork(self._casaNetwork.protocolVersion):
             self._casaClient = CasambiClientClassic(
@@ -178,18 +205,13 @@ class Casambi:
                 self._casaNetwork,
             )
             self._opContext = OperationsContextEvolution()
-        await self._connectClient()
-
-    async def _connectClient(self) -> None:
-        """Initiate the bluetooth connection."""
-        self._casaClient = cast(CasambiClient, self._casaClient)
         await self._casaClient.connect()
         try:
             await self._casaClient.exchangeKey()
             await self._casaClient.authenticate()
-        except ProtocolError as e:
+        except:
             await self._casaClient.disconnect()
-            raise e
+            raise
 
     async def setUnitState(self, target: Unit, state: UnitState) -> None:
         """Set the state of one unit directly.
