@@ -221,3 +221,52 @@ def test_parse_unit_states(client, data_callback):
         IncomingPacketType.UnitState,
         {"id": 2, "online": True, "on": True, "state": b"\x42"},
     )
+
+
+async def test_authenticate_skip_no_key(client, mock_network):
+    mock_network.keyStore.getKey.return_value = None
+    client._connectionState = ConnectionState.KEY_EXCHANGED
+    client._gattClient = AsyncMock()
+
+    await client.authenticate()
+
+    client._gattClient.write_gatt_char.assert_not_called()
+    assert client._connectionState == ConnectionState.KEY_EXCHANGED
+
+
+async def test_send_success(client):
+    client._connectionState = ConnectionState.AUTHENTICATED
+    client._gattClient = AsyncMock()
+    client._nonce = b"1234567890123456"
+    client._encryptor = MagicMock()
+    client._encryptor.encryptThenMac.return_value = b"encrypted_payload"
+    client._outPacketCount = 1
+
+    packet_to_send = b"\x01\x02\x03"
+
+    await client.send(packet_to_send)
+
+    assert client._outPacketCount == 2
+    client._encryptor.encryptThenMac.assert_called_once()
+    client._gattClient.write_gatt_char.assert_called_once_with(
+        CASA_AUTH_CHAR_UUID, b"encrypted_payload"
+    )
+
+
+async def test_send_wrong_state(client):
+    client._connectionState = ConnectionState.CONNECTED
+    with pytest.raises(ConnectionStateError):
+        await client.send(b"\x01\x02")
+
+
+def test_auth_notify_callback_invalid_sig(client):
+    from cryptography.exceptions import InvalidSignature
+
+    client._connectionState = ConnectionState.KEY_EXCHANGED
+    client._nonce = b"1234567890123456"
+    client._encryptor = MagicMock()
+    client._encryptor.decryptAndVerify.side_effect = InvalidSignature()
+
+    client._authNotifyCallback(None, b"1234" + b"invalid_data_that_fails_verification")
+
+    assert client._connectionState == ConnectionState.ERROR
