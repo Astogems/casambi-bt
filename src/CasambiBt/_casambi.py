@@ -2,6 +2,7 @@ import asyncio
 import logging
 from binascii import b2a_hex as b2a
 from collections.abc import Callable
+from copy import copy
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
@@ -410,6 +411,31 @@ class Casambi:
             # Use RestoreLastLevel flag (1) and UseFullTimeFlag (4).
             # Not sure what UseFullTime does but this is what the app uses.
             await self._send(target, b"\xff\x05", OpCode.SetLevel)
+
+    async def turnOff(self, target: Unit | Group | None) -> None:
+        """Turn one or multiple units off.
+
+        If ``target`` is of type ``Unit`` only this unit is affected.
+        If ``target`` is of type ``Group`` the whole group is affected.
+        if ``target`` is of type ``None`` all units in the network are affected.
+
+        :param target: One or multiple targeted units.
+        :return: Nothing is returned by this function. To get the new state register a change handler.
+        :raises BluetoothError: An error occurred in the bluetooth stack.
+        """
+        self._checkNetwork()
+
+        if (
+            isinstance(target, Unit)
+            and target.unitType.get_control(UnitControlType.ONOFF) is not None
+            and not isClassicNetwork(self._casaNetwork.protocolVersion)  # type: ignore
+        ):
+            state = copy(target.state) if target.state is not None else UnitState()
+            state.onoff = False
+            stateBytes = target.getStateAsBytes(state)
+            await self._send(target, stateBytes, OpCode.SetState)
+        else:
+            await self.setLevel(target, 0)
 
     async def switchToScene(self, target: Scene, level: int = 0xFF) -> None:
         """Switch the network to a predefined scene.
