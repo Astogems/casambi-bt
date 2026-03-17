@@ -221,8 +221,24 @@ class Casambi:
         :return: Nothing is returned by this function. To get the new state register a change handler.
         :raises BluetoothError: An error occurred in the bluetooth stack.
         """
-        stateBytes = target.getStateAsBytes(state)
-        await self._send(target, stateBytes, OpCode.SetState)
+        if isClassicNetwork(self._casaNetwork.protocolVersion):  # type: ignore
+            for c in target.unitType.controls:
+                if c.type == UnitControlType.DIMMER and state.dimmer is not None:
+                    await self.setLevel(target, state.dimmer)
+                elif (
+                    c.type == UnitControlType.TEMPERATURE
+                    and state.temperature is not None
+                ):
+                    await self.setTemperature(target, state.temperature)
+                elif c.type == UnitControlType.VERTICAL and state.vertical is not None:
+                    await self.setVertical(target, state.vertical)
+                elif c.type == UnitControlType.WHITE and state.white is not None:
+                    await self.setWhite(target, state.white)
+                elif c.type == UnitControlType.RGB and state.rgb is not None:
+                    await self.setColor(target, state.rgb)
+        else:
+            stateBytes = target.getStateAsBytes(state)
+            await self._send(target, stateBytes, OpCode.SetState)
 
     async def setLevel(self, target: Unit | Group | None, level: int) -> None:
         """Set the level (brightness) for one or multiple units.
