@@ -326,5 +326,4 @@ async def test_exchange_key_fails_after_max_retries(client):
     with pytest.raises(BluetoothError):
         await client.exchangeKey(retries=2)
 
-    # initial attempt + 3 retries = 4 total (consistent with send() convention)
-    assert client._gattClient.read_gatt_char.call_count == 4
+    assert client._gattClient.read_gatt_char.call_count == 3

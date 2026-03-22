@@ -223,9 +223,9 @@ class CasambiClient(ABC):
                     await self._sendInternal(packet)
                     break
                 except BluetoothError:
+                    retry += 1
                     if retry > retries:
                         raise
-                    retry += 1
                     await asyncio.sleep(0.5)
 
             self._outPacketCount += 1
@@ -306,12 +306,12 @@ class CasambiClientEvolution(CasambiClient):
                     )
                     break
                 except BleakError as exc:
+                    retry += 1
                     if retry > retries:
                         raise BluetoothError("Failed to initiate GATT read.") from exc
                     self._logger.debug(
                         "Transient error reading auth characteristic, retrying..."
                     )
-                    retry += 1
                     await asyncio.sleep(0.5)
             self._logger.debug(f"Got {b2a(firstResp)}")
 
@@ -675,12 +675,12 @@ class CasambiClientClassic(CasambiClient):
                     )
                     break
                 except BleakError as exc:
+                    retry += 1
                     if retry > retries:
                         raise BluetoothError("Failed to initiate GATT read.") from exc
                     self._logger.debug(
                         "Transient error reading auth characteristic, retrying..."
                     )
-                    retry += 1
                     await asyncio.sleep(0.5)
             self._logger.debug(f"Got {b2a(firstResp)}")
 
