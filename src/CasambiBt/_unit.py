@@ -1,16 +1,32 @@
 import logging
+import warnings
 from binascii import b2a_hex as b2a
 from colorsys import hsv_to_rgb, rgb_to_hsv
-from dataclasses import dataclass
-from enum import Enum, unique
+from dataclasses import dataclass, field
+from enum import Enum, EnumMeta, unique
 from typing import Final
 
 _LOGGER = logging.getLogger(__name__)
 
 
+class _DeprecatingMeta(EnumMeta):
+    """EnumMeta subclass that emits a DeprecationWarning for the UNKOWN typo alias."""
+
+    def __getattr__(cls, name: str) -> "UnitControlType":
+        if name == "UNKOWN":
+            warnings.warn(
+                "UnitControlType.UNKOWN is a typo and deprecated — use UNKNOWN instead. "
+                "Will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return cls.UNKNOWN
+        raise AttributeError(f"'{cls.__name__}' has no attribute '{name}'")
+
+
 # Numbers are totally arbitrary so far.
 @unique
-class UnitControlType(Enum):
+class UnitControlType(Enum, metaclass=_DeprecatingMeta):
     """All implemented control types."""
 
     DIMMER = 0
@@ -43,8 +59,11 @@ class UnitControlType(Enum):
     SENSOR = 9
     """A sensor value of the light."""
 
-    UNKOWN = 99
-    """State isn't implemented. Control saved for debuggin purposes."""
+    UNIMPLEMENTED = 98
+    """Control type exists in the protocol but is not yet implemented in this library."""
+
+    UNKNOWN = 99
+    """Control type is explicitly unknown in the protocol (e.g. used for sensor data)."""
 
 
 @unique
@@ -96,6 +115,19 @@ class UnitType:
 
         return None
 
+    @property
+    def element_names(self) -> list[str]:
+        """Return element names parsed from the mode string, e.g. ``["Presence", "Daylight"]``.
+
+        Parses names from the ``{Name1,Name2,...}`` section of the mode string.
+        Returns an empty list for modes without this pattern.
+        """
+        start = self.mode.find("{")
+        end = self.mode.find("}")
+        if start == -1 or end == -1 or end <= start + 1:
+            return []
+        return [name.strip() for name in self.mode[start + 1 : end].split(",")]
+
 
 # TODO: Support for different resolutions?
 # TODO: Work with HS instead of RGB internally
@@ -114,6 +146,7 @@ class UnitState:
         self._onoff: bool | None = None
         self._raw_state: bytes | None = None
         self._unknown_controls: list[tuple[int, int, int]] = []
+        self._sensors: dict[str, int] = {}
 
     @property
     def raw_state(self) -> bytes | None:
@@ -125,9 +158,19 @@ class UnitState:
         """Return a copy of the list of unknown controls parsed from the last state update.
 
         Each entry is a tuple of ``(bit_offset, bit_length, value)`` corresponding to a
-        control whose type is :attr:`UnitControlType.UNKOWN`.
+        control whose type is :attr:`UnitControlType.UNKNOWN`.
         """
         return list(self._unknown_controls)
+
+    @property
+    def sensors(self) -> dict[str, int]:
+        """Return sensor readings keyed by element name from the unit type mode string.
+
+        Populated for units whose mode string contains a ``{Name1,Name2,...}`` pattern
+        and whose unrecognised (UNKNOWN) controls map to those names in order.
+        Returns a copy; empty for all other unit types.
+        """
+        return dict(self._sensors)
 
     def _check_range(
         self, value: int | float, min: int | float, max: int | float
@@ -437,6 +480,7 @@ class Unit:
     _on: bool = False
     _online: bool = False
     _isClassic: bool = False
+    _sensor_cache: dict[int, int] = field(default_factory=dict)
 
     @property
     def state(self) -> UnitState | None:
@@ -458,6 +502,17 @@ class Unit:
     @property
     def online(self) -> bool:
         return self._online
+
+    @property
+    def sensor_cache(self) -> dict[int, int]:
+        """Return accumulated sensor readings for EXT/Elements multiplexed sensor platforms.
+
+        Each entry maps a ``packet_type`` (encoded in ``raw[1] >> 6``) to the most
+        recently received raw value for that sensor.  The mapping from ``packet_type``
+        to physical measurement is device-specific and remains the responsibility of the
+        caller.  Returns an empty dict for non-EXT/Elements unit types.
+        """
+        return dict(self._sensor_cache)
 
     # TODO: Add tests for this method
     def getStateAsBytes(self, state: UnitState) -> bytes:
@@ -537,6 +592,7 @@ class Unit:
 
         self._state._raw_state = value
         self._state._unknown_controls = []
+        self._state._sensors = {}
 
         # TODO: Support for resolutions >8 byte?
         for c in self.unitType.controls:
@@ -579,12 +635,32 @@ class Unit:
                 self._state.slider = cInt << scale
             elif c.type == UnitControlType.ONOFF:
                 self._state.onoff = cInt != 0
-            elif c.type == UnitControlType.UNKOWN:
+            elif c.type == UnitControlType.SENSOR:
+                _LOGGER.debug(
+                    f"Sensor control at {c.offset}: {cInt}. Unit type is {self.unitType.id}."
+                )
+            elif c.type == UnitControlType.UNKNOWN:
                 # Might be useful for implementing more state types
                 _LOGGER.debug(
-                    f"Value for unkown control type at {c.offset}: {cInt}. Unit type is {self.unitType.id}."
+                    f"Value for unknown control type at {c.offset}: {cInt}. Unit type is {self.unitType.id}."
                 )
+                unknown_index = len(self._state._unknown_controls)
                 self._state._unknown_controls.append((c.offset, c.length, cInt))
+                names = self.unitType.element_names
+                if unknown_index < len(names):
+                    self._state._sensors[names[unknown_index]] = cInt
+
+        # For EXT/Elements multiplexed sensor platforms, decode the packet header
+        # and accumulate per-type readings in sensor_cache across successive packets.
+        # Each 5-byte packet reports one sensor: raw[1] bits[7:6] = packet_type,
+        # raw[2] = raw value.
+        if len(value) >= 3 and self.unitType.mode.startswith("EXT/Elements"):
+            packet_type = (value[1] >> 6) & 0x03
+            sensor_value = value[2]
+            self._sensor_cache[packet_type] = sensor_value
+            _LOGGER.debug(
+                f"EXT/Elements sensor update: packet_type={packet_type}, value={sensor_value}"
+            )
 
         _LOGGER.debug(f"Parsed {b2a(value)} to {self.state.__repr__()}")
 
