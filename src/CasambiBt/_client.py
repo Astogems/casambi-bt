@@ -444,7 +444,7 @@ class CasambiClientEvolution(CasambiClient):
     async def authenticate(self) -> None:
         self._checkState(ConnectionState.KEY_EXCHANGED)
 
-        self._logger.info("Authenicating channel...")
+        self._logger.info("Authenticating channel...")
         key = self._network.keyStore.getKey()  # Session key
 
         if not key:
@@ -539,10 +539,9 @@ class CasambiClientEvolution(CasambiClient):
             # In the future we might want to parse the revision and issue a warning if there is a mismatch.
             pass
         else:
-            self._logger.info(f"Packet type {packetType} not implemented. Ignoring!")
+            self._logger.debug(f"Packet type {packetType} not implemented. Ignoring!")
 
     def _parseUnitStates(self, data: bytes) -> None:
-        self._logger.info("Parsing incoming unit states...")
         self._logger.debug(f"Incoming unit state: {b2a(data)}")
 
         pos = 0
