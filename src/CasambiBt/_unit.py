@@ -59,6 +59,10 @@ class UnitControlType(Enum, metaclass=_DeprecatingMeta):
     SENSOR = 9
     """A sensor value of the light."""
 
+    WHITECOLORBALANCE = 10
+    """Cross-fade balance between the white and color channels (raw 6-bit value,
+    0 = pure white, 63 = pure color)."""
+
     PRESENCE = 11
     """Binary presence/occupancy value (0 = absent, ≥1 = present). Raw 2-bit integer."""
 
@@ -150,6 +154,7 @@ class UnitState:
         self._xy: tuple[float, float] | None = None
         self._slider: int | None = None
         self._onoff: bool | None = None
+        self._white_balance: int | None = None
         self._presence: int | None = None
         self._lux: int | None = None
         self._raw_state: bytes | None = None
@@ -348,6 +353,23 @@ class UnitState:
     @onoff.deleter
     def onoff(self) -> None:
         self._onoff = None
+
+    WCB_MIN: Final = 0
+    WCB_MAX: Final = 63
+
+    @property
+    def white_balance(self) -> int | None:
+        """Return the white/color balance raw value (0 = pure white, 63 = pure color), or None."""
+        return self._white_balance
+
+    @white_balance.setter
+    def white_balance(self, value: int) -> None:
+        self._check_range(value, self.WCB_MIN, self.WCB_MAX)
+        self._white_balance = value
+
+    @white_balance.deleter
+    def white_balance(self) -> None:
+        self._white_balance = None
 
     PRESENCE_MIN: Final = 0
     PRESENCE_MAX: Final = 3
@@ -603,6 +625,11 @@ class Unit:
                 scaledValue = state.slider >> scale
             elif c.type == UnitControlType.ONOFF and state.onoff is not None:
                 scaledValue = 1 if state.onoff else 0
+            elif (
+                c.type == UnitControlType.WHITECOLORBALANCE
+                and state.white_balance is not None
+            ):
+                scaledValue = state.white_balance
             elif c.type == UnitControlType.PRESENCE and state.presence is not None:
                 scaledValue = state.presence
             elif c.type == UnitControlType.LUX and state.lux is not None:
@@ -702,6 +729,8 @@ class Unit:
                 self._state.slider = cInt << scale
             elif c.type == UnitControlType.ONOFF:
                 self._state.onoff = cInt != 0
+            elif c.type == UnitControlType.WHITECOLORBALANCE:
+                self._state.white_balance = cInt
             elif c.type == UnitControlType.PRESENCE:
                 self._state.presence = cInt
             elif c.type == UnitControlType.LUX:
