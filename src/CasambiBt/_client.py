@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import struct
 from abc import ABC, abstractmethod
@@ -251,7 +252,9 @@ class CasambiClient(ABC):
         self._logger.info("Disconnecting...")
 
         if self._callbackTask is not None:
-            self._callbackTask.cancel()
+            if self._callbackTask.cancel():
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._callbackTask
             self._callbackTask = None
 
         if self._gattClient is not None and self._gattClient.is_connected:
