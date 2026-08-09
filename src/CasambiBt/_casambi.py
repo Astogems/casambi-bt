@@ -181,9 +181,7 @@ class Casambi:
                 ConnectionState.NONE,
                 "Reconnect only possible after initial connection and before disconnect.",
             )
-        if self._casaClient._connectionState != ConnectionState.NONE:
-            await self._casaClient.disconnect()
-
+        await self._casaClient.disconnect()
         await self._connectClient(addr_or_device)
 
     async def _connectClient(self, addr_or_device: str | BLEDevice) -> None:
