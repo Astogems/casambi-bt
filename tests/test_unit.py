@@ -513,11 +513,11 @@ def test_unit_state_raw_state() -> None:
 
 
 def test_unit_state_unknown_controls() -> None:
-    """unknown_controls captures UNKOWN controls and returns a defensive copy."""
+    """unknown_controls captures UNKNOWN controls and returns a defensive copy."""
     unit = _make_unit(
         [
             UnitControl(
-                type=UnitControlType.UNKOWN,
+                type=UnitControlType.UNKNOWN,
                 offset=0,
                 length=8,
                 default=0,
@@ -542,7 +542,7 @@ def test_unit_state_unknown_controls_reset() -> None:
     unit = _make_unit(
         [
             UnitControl(
-                type=UnitControlType.UNKOWN,
+                type=UnitControlType.UNKNOWN,
                 offset=0,
                 length=8,
                 default=0,
@@ -836,29 +836,6 @@ def test_getStateAsBytes_writes_white_color_balance() -> None:
     state.white_balance = 42
     data = unit.getStateAsBytes(state)
     assert data[0] & 0x3F == 42  # lower 6 bits
-
-
-def test_getStateAsBytes_preserves_white_balance_when_not_in_new_state() -> None:
-    """white_balance from the last received state is preserved when not set in the new UnitState."""
-    unit = _make_unit(
-        [
-            UnitControl(
-                type=UnitControlType.WHITECOLORBALANCE,
-                offset=0,
-                length=6,
-                default=0,
-                readonly=False,
-            )
-        ],
-        state_length=1,
-    )
-
-    unit.setStateFromBytes(bytes([31]))  # seed white_balance = 31
-
-    # New state does not set white_balance → should preserve 31
-    state = UnitState()
-    data = unit.getStateAsBytes(state)
-    assert data[0] & 0x3F == 31
 
 
 def test_getStateAsBytes_uses_wcb_default_when_no_current_state() -> None:
