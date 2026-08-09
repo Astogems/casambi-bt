@@ -519,6 +519,7 @@ class CasambiClientEvolution(CasambiClient):
         except InvalidSignature:
             self._logger.fatal("Invalid signature for auth response!")
             self._connectionState = ConnectionState.ERROR
+            self._notifySignal.set()
             return
 
         # TODO: Verify Digest 2 (to compare with response from device); SHA256(key.key||self pubKey point||self._key)
