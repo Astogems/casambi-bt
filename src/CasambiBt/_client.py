@@ -12,7 +12,9 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.client import BLEDevice
 from bleak.exc import BleakError
 from bleak_retry_connector import (
+    BleakAbortedError,
     BleakNotFoundError,
+    BleakOutOfConnectionSlotsError,
     close_stale_connections,
     establish_connection,
     get_device,
@@ -137,6 +139,9 @@ class CasambiClient(ABC):
         except BleakError as e:
             self._logger.error("Failed to connect.", exc_info=True)
             raise BluetoothError(e.args) from e
+        except (BleakOutOfConnectionSlotsError, BleakAbortedError) as e:
+            self._logger.warning("Transient connection error", exc_info=True)
+            raise BluetoothError() from e
         except Exception as e:
             self._logger.error("Unkown connection failure.", exc_info=True)
             raise BluetoothError from e
