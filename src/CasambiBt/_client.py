@@ -122,8 +122,13 @@ class CasambiClient(ABC):
             # If we are already connected to the device the key exchange will fail.
             await close_stale_connections(device)
             # TODO: Should we try to get access to the network name here?
+            # Using the service cache leads to bugs so disable it.
             self._gattClient = await establish_connection(
-                BleakClient, device, "Casambi Network", self._on_disconnect
+                BleakClient,
+                device,
+                "Casambi Network",
+                self._on_disconnect,
+                use_services_cache=False,
             )
         except BleakNotFoundError as e:
             # Guess that this is the error reason since there are no better error types
