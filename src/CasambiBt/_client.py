@@ -330,8 +330,13 @@ class CasambiClientEvolution(CasambiClient):
                     # TODO: Implement proper handling after understanding this behavior.
                     pass
                 else:
-                    self._logger.error(
-                        "Unexpected answer from device! Wrong device or protocol version? Trying to continue."
+                    # Silently continuing here can lead to invalid operations in the state machine
+                    # See https://github.com/lkempf/casambi-bt-hass/issues/152
+                    raise ProtocolError(
+                        "Unexpected answer from device! Wrong device or protocol version?"
+                        "If this happens after an update please create an issue."
+                        "First response: %s",
+                        b2a(firstResp),
                     )
 
             # Parse device info
