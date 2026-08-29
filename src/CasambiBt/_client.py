@@ -31,6 +31,10 @@ from ._constants import (
 from ._encryption import Encryptor
 from ._network import Network
 
+# How long to wait for the device to answer during the handshake.
+# The device itself gives up around 10s, so this only needs to outlast that.
+NOTIFY_TIMEOUT = 15.0
+
 # We need to move these imports here to prevent a cycle.
 from .errors import (  # noqa: E402
     BluetoothError,
@@ -149,6 +153,10 @@ class CasambiClient:
             self._logger.debug("Executing disconnect callback.")
             self._disconnectedCallback()
         self._connectionState = ConnectionState.NONE
+        # Wake anything waiting on a notification. Without this, losing the
+        # link mid-handshake leaves exchangeKey/authenticate blocked forever on
+        # _notifySignal, since the device that was going to set it is gone.
+        self._notifySignal.set()
 
     async def exchangeKey(self) -> None:
         self._checkState(ConnectionState.CONNECTED)
@@ -197,7 +205,7 @@ class CasambiClient:
             self._activityLock.release()
 
         # Wait for key exchange, will get notified by _exchNotifyCallback
-        await self._notifySignal.wait()
+        await self._waitForNotify("the device to initiate the key exchange")
         await self._activityLock.acquire()
         try:
             self._notifySignal.clear()
@@ -218,7 +226,7 @@ class CasambiClient:
             self._activityLock.release()
 
         # Wait for success response from _exchNotifyCallback
-        await self._notifySignal.wait()
+        await self._waitForNotify("the key exchange response")
         await self._activityLock.acquire()
         try:
             self._notifySignal.clear()
@@ -235,6 +243,26 @@ class CasambiClient:
                     self._connectionState = ConnectionState.AUTHENTICATED
         finally:
             self._activityLock.release()
+
+    async def _waitForNotify(self, what: str) -> None:
+        """Wait for the device to answer during the handshake.
+
+        Fails fast instead of blocking forever: the wait is bounded, and
+        _on_disconnect sets _notifySignal so a dropped link raises here rather
+        than stranding the caller on an event nothing will ever set.
+        """
+        try:
+            async with asyncio.timeout(NOTIFY_TIMEOUT):
+                await self._notifySignal.wait()
+        except TimeoutError as e:
+            self._notifySignal.clear()
+            raise ProtocolError(
+                f"Timed out after {NOTIFY_TIMEOUT}s waiting for {what}."
+            ) from e
+
+        if self._connectionState == ConnectionState.NONE:
+            self._notifySignal.clear()
+            raise ProtocolError(f"Device disconnected while waiting for {what}.")
 
     def _queueCallback(self, handle: BleakGATTCharacteristic, data: bytes) -> None:
         self._callbackQueue.put_nowait((handle, data))
@@ -348,7 +376,7 @@ class CasambiClient:
             self._activityLock.release()
 
         # Wait for auth response
-        await self._notifySignal.wait()
+        await self._waitForNotify("the authentication response")
 
         await self._activityLock.acquire()
         try:
